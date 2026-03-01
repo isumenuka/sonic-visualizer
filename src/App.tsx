@@ -400,6 +400,22 @@ export default function App() {
           <span className="text-xs sm:text-sm font-semibold text-white/80 tracking-wide hidden sm:block">Sonic Visualizer</span>
         </div>
 
+        {/* ── Aspect Ratio Toggle (always visible in the header) ── */}
+        <div className="flex items-center gap-1 bg-white/5 rounded-xl p-0.5 border border-white/10">
+          {(['16:9', '9:16'] as AspectRatio[]).map(r => (
+            <button
+              key={r}
+              onClick={() => setAspectRatio(r)}
+              className={`px-2.5 py-1 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${aspectRatio === r
+                  ? 'bg-white text-black shadow-sm'
+                  : 'text-neutral-400 hover:text-white'
+                }`}
+            >
+              {r}
+            </button>
+          ))}
+        </div>
+
         {/* Performance mode toggle */}
         <div className="flex items-center gap-2">
           <div className={`w-1.5 h-1.5 rounded-full ${performanceMode ? 'bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]' : 'bg-neutral-600'}`} />
@@ -422,17 +438,30 @@ export default function App() {
           <div className="absolute inset-0 opacity-[0.035] pointer-events-none"
             style={{ backgroundImage: 'radial-gradient(circle,#fff 1px,transparent 1px)', backgroundSize: '28px 28px' }} />
 
-          {/* Preview box */}
+          {/* Preview box — sized to fill available space while keeping aspect ratio */}
           <div
             ref={previewBoxRef}
-            className="relative bg-black rounded-xl sm:rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.8)] border border-white/10 z-10"
-            style={
-              aspectRatio === '16:9'
-                ? { aspectRatio: '16/9', width: '100%', maxWidth: 'min(100%, calc((100% ) * 1))' }
-                : { aspectRatio: '9/16', height: '100%', width: 'auto', maxHeight: '100%' }
+            className="relative bg-black rounded-xl sm:rounded-2xl overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.8)] border border-white/10"
+            style=
+            {aspectRatio === '16:9'
+              ? {
+                /* Fill width but cap height to available container height */
+                aspectRatio: '16/9',
+                width: '100%',
+                maxWidth: '100%',
+                maxHeight: '100%',
+              }
+              : {
+                /* Portrait: fill height, auto width */
+                aspectRatio: '9/16',
+                height: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                maxWidth: '100%',
+              }
             }
           >
-            {/* Background image (inside box) */}
+            {/* Background image layer */}
             {!isExporting && (
               <div className="absolute inset-0 bg-cover bg-center pointer-events-none"
                 style={{
@@ -447,16 +476,6 @@ export default function App() {
             {/* Canvas */}
             <canvas ref={canvasRef} className="absolute inset-0"
               style={{ transform: `translate(${shakeOffset.x}px,${shakeOffset.y}px)`, willChange: 'transform' }} />
-
-            {/* Aspect ratio toggle — top-right inside box */}
-            <div className="absolute top-2 right-2 z-20 flex gap-1">
-              {(['16:9', '9:16'] as AspectRatio[]).map(r => (
-                <button key={r} onClick={() => setAspectRatio(r)}
-                  className={`px-2 py-0.5 text-[9px] sm:text-[10px] font-bold rounded-md transition-all ${aspectRatio === r ? 'bg-white text-black' : 'bg-black/60 text-white/50 border border-white/20 hover:text-white'}`}>
-                  {r}
-                </button>
-              ))}
-            </div>
 
             {/* Corner accents */}
             <div className="absolute top-0 left-0 w-5 h-5 border-t-2 border-l-2 border-white/20 rounded-tl-xl pointer-events-none" />
