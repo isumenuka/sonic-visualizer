@@ -12,6 +12,7 @@ import {
   drawRing, drawStrings, drawOrbit, drawSpikes, drawLaser,
   drawNebula, drawAura, drawPeaks
 } from './visualizers/drawings';
+import { exportWithWebCodecs } from './utils/exportEngine';
 
 import { CropModal } from './components/ui/CropModal';
 import { TopBar } from './components/ui/TopBar';
@@ -29,12 +30,9 @@ export default function App() {
   const [showControls, setShowControls] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-  const [exportTimeLeft, setExportTimeLeft] = useState(0);
+  const [exportSpeed, setExportSpeed] = useState(0); // multiplier vs realtime
   const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const exportCancelledRef = useRef(false);
-  const exportIntervalRef = useRef<number | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
   const isExportingRef = useRef(false);
 
   // Cached Image objects for canvas drawing (avoids creating new Image every frame)
@@ -82,126 +80,46 @@ export default function App() {
   const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
 
   const exportVideo = async () => {
-    const canvas = canvasRef.current;
-    const audio = audioRef.current;
-    if (!canvas || !audio || !audioFile) return;
+    if (!audioFile) return;
 
+    const abortController = new AbortController();
+    exportAbortRef.current = abortController;
     setIsExporting(true);
     isExportingRef.current = true;
     setExportProgress(0);
-    setExportTimeLeft(0);
-    recordedChunksRef.current = [];
-    exportCancelledRef.current = false;
-
-    // Ensure AudioContext is ready
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 2048;
-      sourceRef.current = audioContextRef.current.createMediaElementSource(audio);
-      sourceRef.current.connect(analyserRef.current);
-      // DO NOT connect to destination automatically if we are about to export
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      await audioContextRef.current.resume();
-    }
+    setExportSpeed(0);
 
     const [w, h] = resolutionMap[recordingQuality];
-    canvas.width = w;
-    canvas.height = h;
 
-    // @ts-ignore - mozCaptureStream is not in standard types but exists in Firefox
-    const stream = canvas.captureStream ? canvas.captureStream(60) : (canvas as any).mozCaptureStream(60);
-
-    // Mix audio into the recording stream and disconnect from speakers (mute)
-    if (audioContextRef.current && analyserRef.current) {
-      analyserRef.current.disconnect(); // Disconnect from speaker output
-      const dest = audioContextRef.current.createMediaStreamDestination();
-      analyserRef.current.connect(dest); // Connect specifically to recording stream
-      const audioTrack = dest.stream.getAudioTracks()[0];
-      if (audioTrack) stream.addTrack(audioTrack);
-    }
-
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
-
-    const mr = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 40_000_000 });
-    mr.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
-
-    mr.onstop = () => {
-      if (exportIntervalRef.current) clearInterval(exportIntervalRef.current);
-
-      if (!exportCancelledRef.current) {
-        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sonic-visualizer-${recordingQuality}.webm`;
-        document.body.appendChild(a); // Required for Firefox to allow clicking
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1000); // Delay prevents download cancellation
+    try {
+      await exportWithWebCodecs({
+        audioFile,
+        width: w,
+        height: h,
+        quality: recordingQuality,
+        settings: settingsRef.current,
+        bgImg: bgImgRef.current,
+        centerImg: centerImgRef.current,
+        logoImg: logoImgRef.current,
+        onProgress: (pct, speedX) => {
+          setExportProgress(pct);
+          setExportSpeed(speedX);
+        },
+        signal: abortController.signal,
+      });
+    } catch (err: any) {
+      if (!abortController.signal.aborted) {
+        alert(`Export failed: ${err?.message ?? err}`);
       }
-
-      if (canvasRef.current) {
-        canvasRef.current.width = window.innerWidth;
-        canvasRef.current.height = window.innerHeight;
-      }
-
-      // Reconnect audio to speakers
-      if (analyserRef.current && audioContextRef.current) {
-        analyserRef.current.disconnect();
-        analyserRef.current.connect(audioContextRef.current.destination);
-      }
-
+    } finally {
       setIsExporting(false);
       isExportingRef.current = false;
-      setIsPlaying(false);
-    };
-
-    // Calculate progress smoothly
-    const startTime = Date.now();
-    exportIntervalRef.current = window.setInterval(() => {
-      if (!audioRef.current) return;
-      const current = audioRef.current.currentTime;
-      const duration = audioRef.current.duration;
-      if (duration > 0) {
-        const pct = (current / duration) * 100;
-        setExportProgress(pct);
-
-        const elapsed = (Date.now() - startTime) / 1000;
-        const estimatedTotal = pct > 0 ? elapsed / (pct / 100) : 0;
-        setExportTimeLeft(Math.max(0, estimatedTotal - elapsed));
-      }
-    }, 200);
-
-    // Start from beginning and auto-stop when audio ends
-    audio.currentTime = 0;
-
-    const handleExportAudioEnded = () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
-      setIsPlaying(false);
-      audio.removeEventListener('ended', handleExportAudioEnded);
-    };
-    audio.addEventListener('ended', handleExportAudioEnded);
-
-    mr.start(1000); // Emit data in 1-second chunks to reduce RAM usage overhead
-    audio.play();
-    setIsPlaying(true);
-    mediaRecorderRef.current = mr;
+      exportAbortRef.current = null;
+    }
   };
 
   const cancelExport = () => {
-    exportCancelledRef.current = true;
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-    }
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
+    exportAbortRef.current?.abort();
     setIsExporting(false);
     isExportingRef.current = false;
   };
@@ -683,7 +601,7 @@ export default function App() {
       <ExportModal
         isOpen={isExporting}
         progress={exportProgress}
-        timeLeft={exportTimeLeft}
+        speed={exportSpeed}
         onCancel={cancelExport}
       />
     </div>

@@ -1,21 +1,18 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Loader2, X, Clock } from 'lucide-react';
+import { Loader2, X, Zap } from 'lucide-react';
 
 interface ExportModalProps {
     isOpen: boolean;
     progress: number;
-    timeLeft: number;
+    speed: number; // realtime multiplier, e.g. 4.2 means 4.2x faster than realtime
     onCancel: () => void;
 }
 
-export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModalProps) {
-    const formatTime = (seconds: number) => {
-        if (seconds < 0 || isNaN(seconds) || !isFinite(seconds)) return 'Calculating...';
-        const m = Math.floor(seconds / 60);
-        const s = Math.floor(seconds % 60);
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    };
+export function ExportModal({ isOpen, progress, speed, onCancel }: ExportModalProps) {
+    const speedLabel = speed > 0.5
+        ? `⚡ ${speed.toFixed(1)}× realtime`
+        : 'Initialising encoder…';
 
     return (
         <AnimatePresence>
@@ -38,9 +35,15 @@ export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModa
                         </div>
 
                         <h3 className="text-xl font-bold text-white mb-1">Rendering Video</h3>
-                        <p className="text-sm font-medium text-neutral-400 mb-6 text-center">
-                            Keep this window focused.<br />Audio is muted during export.
+                        <p className="text-sm font-medium text-neutral-400 mb-1 text-center">
+                            GPU-accelerated offline render
                         </p>
+
+                        {/* Speed badge */}
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 bg-emerald-400/10 border border-emerald-400/20 px-3 py-1 rounded-full mb-6">
+                            <Zap className="w-3.5 h-3.5" />
+                            <span>{speedLabel}</span>
+                        </div>
 
                         <div className="w-full space-y-2 mb-6">
                             <div className="flex justify-between items-center text-sm font-semibold text-white">
@@ -54,10 +57,6 @@ export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModa
                                     animate={{ width: `${progress}%` }}
                                     transition={{ ease: 'linear', duration: 0.1 }}
                                 />
-                            </div>
-                            <div className="flex justify-start items-center gap-1.5 text-xs font-medium text-neutral-500 mt-2">
-                                <Clock className="w-3.5 h-3.5" />
-                                <span>Time left: {formatTime(timeLeft)}</span>
                             </div>
                         </div>
 
