@@ -20,26 +20,26 @@ export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModa
     return (
         <AnimatePresence>
             {isOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-[100] bg-black flex items-center justify-center p-4"
+                >
                     <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        className="absolute inset-0 bg-black z-40"
-                    />
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                        initial={{ opacity: 0, scale: 0.92, y: 16 }}
                         animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                        className="relative w-full max-w-sm bg-neutral-900 border border-white/10 p-6 rounded-3xl shadow-2xl flex flex-col items-center"
+                        exit={{ opacity: 0, scale: 0.92, y: 16 }}
+                        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                        className="w-full max-w-sm bg-neutral-900 border border-white/10 p-8 rounded-3xl shadow-2xl flex flex-col items-center"
                     >
-                        <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
+                        <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center mb-5">
                             <Loader2 className="w-8 h-8 text-white animate-spin" />
                         </div>
 
                         <h3 className="text-xl font-bold text-white mb-1">Rendering Video</h3>
                         <p className="text-sm font-medium text-neutral-400 mb-6 text-center">
-                            Please keep this window focused.<br />Audio is muted during export.
+                            Keep this window focused.<br />Audio is muted during export.
                         </p>
 
                         <div className="w-full space-y-2 mb-6">
@@ -52,7 +52,7 @@ export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModa
                                     className="h-full bg-white origin-left"
                                     initial={{ width: 0 }}
                                     animate={{ width: `${progress}%` }}
-                                    transition={{ ease: "linear", duration: 0.1 }}
+                                    transition={{ ease: 'linear', duration: 0.1 }}
                                 />
                             </div>
                             <div className="flex justify-start items-center gap-1.5 text-xs font-medium text-neutral-500 mt-2">
@@ -68,7 +68,7 @@ export function ExportModal({ isOpen, progress, timeLeft, onCancel }: ExportModa
                             <X className="w-4 h-4" /> Cancel Export
                         </button>
                     </motion.div>
-                </div>
+                </motion.div>
             )}
         </AnimatePresence>
     );
