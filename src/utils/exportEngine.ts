@@ -1,14 +1,16 @@
 /**
- * GPU-Accelerated WebCodecs Export Engine — v2
+ * GPU-Accelerated WebCodecs Export Engine — v3
  *
- * Upgrades vs v1:
- *  1. H.264 (avc1) + AAC   — best hardware encoder coverage on every GPU/OS
- *  2. mp4-muxer             — universal .mp4 output (plays on every device)
- *  3. Deep render-ahead pipeline — keep GPU fully fed (queue depth 12)
- *  4. Parallel audio track  — audio is encoded the moment PCM is ready,
- *                             never blocks the video render loop
- *  5. Lossless color space  — full-range YUV colorSpace declared so the muxer
- *                             preserves every encoded bit without re-quantising
+ * Audio codec strategy:
+ *   1. Probe AAC support via AudioEncoder.isConfigSupported()
+ *   2. If AAC supported → MP4 container (best compatibility)
+ *   3. If AAC not supported (Linux, some builds) → Opus + WebM (always works)
+ *
+ * Video codec strategy:
+ *   1. H.264 High profile with GPU hardware acceleration (if AAC/MP4 path)
+ *   2. VP9 software fallback (WebM path)
+ *
+ * Channel count guard: always clamp to [1, 2] to prevent "channel count 0" crash.
  */
 
 import {
@@ -17,9 +19,8 @@ import {
     drawNebula, drawAura, drawPeaks,
 } from '../visualizers/drawings';
 import { VisualizerSettings } from '../types';
-import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Particle = { x: number; y: number; speed: number; angle: number; life: number; color: string; wobbleOffset?: number };
 type NebParticle = { x: number; y: number; vx: number; vy: number; life: number; size: number; color: string };
@@ -47,43 +48,38 @@ export interface ExportOptions {
     signal: AbortSignal;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Resolve the best supported H.264 codec string for this device's GPU.
- *  Priority: High@5.2 (4K) → High@4.1 (1080p/2K) → Baseline */
+/** Probe for best supported H.264 codec string on this GPU */
 async function resolveH264Codec(width: number, height: number): Promise<{
     codec: string;
     hardwareAcceleration: HardwareAcceleration;
 }> {
-    const profiles: { codec: string; hw: HardwareAcceleration }[] = [
-        { codec: 'avc1.640034', hw: 'prefer-hardware' }, // High 5.2 — 4K HW
-        { codec: 'avc1.64002a', hw: 'prefer-hardware' }, // High 4.2 — 1080p/2K HW
-        { codec: 'avc1.640028', hw: 'prefer-hardware' }, // High 4.0 — HW
-        { codec: 'avc1.640028', hw: 'prefer-software' }, // High 4.0 — SW fallback
-        { codec: 'avc1.420028', hw: 'prefer-software' }, // Baseline SW
-    ];
-
     const bitrate = getVideoBitrate(width, height);
-    for (const { codec, hw } of profiles) {
-        const cfg: VideoEncoderConfig = { codec, width, height, bitrate, framerate: 60, hardwareAcceleration: hw };
+    const candidates: { codec: string; hw: HardwareAcceleration }[] = [
+        { codec: 'avc1.640034', hw: 'prefer-hardware' },
+        { codec: 'avc1.64002a', hw: 'prefer-hardware' },
+        { codec: 'avc1.640028', hw: 'prefer-hardware' },
+        { codec: 'avc1.640028', hw: 'prefer-software' },
+        { codec: 'avc1.420028', hw: 'prefer-software' },
+    ];
+    for (const { codec, hw } of candidates) {
         try {
-            const result = await VideoEncoder.isConfigSupported(cfg);
-            if (result.supported) return { codec, hardwareAcceleration: hw };
+            const res = await VideoEncoder.isConfigSupported({ codec, width, height, bitrate, framerate: 60, hardwareAcceleration: hw });
+            if (res.supported) return { codec, hardwareAcceleration: hw };
         } catch { /* try next */ }
     }
-    // Absolute last resort
     return { codec: 'avc1.420028', hardwareAcceleration: 'prefer-software' };
 }
 
-/** Bitrate in bps — high quality, lossless-looking at each resolution */
 function getVideoBitrate(width: number, height: number): number {
     const px = width * height;
-    if (px >= 3840 * 2160) return 120_000_000; // 4K  — 120 Mbps (broadcast grade)
-    if (px >= 2560 * 1440) return 60_000_000; // 2K  —  60 Mbps
-    return 30_000_000; // 1080p— 30 Mbps (studio quality)
+    if (px >= 3840 * 2160) return 120_000_000;
+    if (px >= 2560 * 1440) return 60_000_000;
+    return 30_000_000;
 }
 
-// ─── FFT Implementation (Cooley-Tukey) ───────────────────────────────────────
+// ─── FFT ──────────────────────────────────────────────────────────────────────
 
 function computeFFT(real: Float32Array, imag: Float32Array): void {
     const n = real.length;
@@ -152,7 +148,6 @@ function renderExportFrame(
 ): void {
     const cX = W / 2, cY = H / 2;
 
-    // Clear / trail
     if (s.trailEnabled) {
         ctx.globalCompositeOperation = 'destination-out';
         ctx.fillStyle = 'rgba(255,255,255,0.18)';
@@ -162,7 +157,6 @@ function renderExportFrame(
         ctx.clearRect(0, 0, W, H);
     }
 
-    // Background image
     if (bgImg) {
         ctx.save();
         const pad = s.bgBlur * 2;
@@ -175,7 +169,6 @@ function renderExportFrame(
         ctx.restore();
     }
 
-    // Background particles
     if (s.bgParticlesEnabled) {
         let bass = 0;
         for (let i = 0; i < 10; i++) bass += dataArray[i];
@@ -202,7 +195,6 @@ function renderExportFrame(
         ctx.restore();
     }
 
-    // Bass / pulse
     let bassT = 0, maxBass = 0;
     for (let i = 0; i < 20; i++) { bassT += dataArray[i]; if (dataArray[i] > maxBass) maxBass = dataArray[i]; }
     const pScale = s.pulseEnabled ? 1 + (bassT / 20 / 255) * .2 : 1;
@@ -279,8 +271,7 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     const { audioFile, width, height, settings, bgImg, centerImg, logoImg, onProgress, signal } = options;
     const FPS = 60;
     const FFT_SIZE = 2048;
-    // How many encoded frames can be queued before we pause rendering.
-    // Higher = more GPU parallelism, lower = less RAM usage.
+    const GOP = FPS * 2;
     const PIPELINE_DEPTH = 12;
 
     // ── 1. Decode audio ───────────────────────────────────────────────────────
@@ -292,12 +283,12 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     await decodeCtx.close();
     if (signal.aborted) return;
 
-    // Resample to 48 kHz if necessary (AAC/Opus both prefer 48 kHz)
+    // Resample to 48 kHz (AAC/Opus both prefer 48 kHz)
     const TARGET_SR = 48000;
     let encBuf = originalBuffer;
     if (originalBuffer.sampleRate !== TARGET_SR) {
         const rsCtx = new OfflineAudioContext(
-            originalBuffer.numberOfChannels,
+            Math.max(1, originalBuffer.numberOfChannels),
             Math.ceil(originalBuffer.duration * TARGET_SR),
             TARGET_SR,
         );
@@ -306,13 +297,18 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         encBuf = await rsCtx.startRendering();
     }
 
-    // Mono PCM for FFT (at original sample rate for accurate timestamp alignment)
-    // Clamp channel count — guard against files that report 0 channels (causes AudioEncoder crash).
-    // Cap at 2 so we always produce stereo-or-below AAC which every decoder supports.
+    // ── CRITICAL: clamp channel count to [1,2] ────────────────────────────────
+    // Some audio decoders or resampled buffers may report 0 channels,
+    // which causes AudioEncoder.configure() to throw.
     const numChannels = Math.max(1, Math.min(2, encBuf.numberOfChannels || 1));
 
-    const ch0 = originalBuffer.numberOfChannels > 0 ? originalBuffer.getChannelData(0) : new Float32Array(originalBuffer.length);
-    const ch1 = originalBuffer.numberOfChannels > 1 ? originalBuffer.getChannelData(1) : ch0;
+    // Mono PCM for FFT
+    const ch0 = originalBuffer.numberOfChannels >= 1
+        ? originalBuffer.getChannelData(0)
+        : new Float32Array(originalBuffer.length);
+    const ch1 = originalBuffer.numberOfChannels >= 2
+        ? originalBuffer.getChannelData(1)
+        : ch0;
     const monoPCM = new Float32Array(ch0.length);
     for (let i = 0; i < ch0.length; i++) monoPCM[i] = (ch0[i] + ch1[i]) / 2;
 
@@ -320,67 +316,110 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     const totalFrames = Math.ceil(duration * FPS);
     if (signal.aborted) return;
 
-    // ── 2. WebCodecs availability check ──────────────────────────────────────
+    // ── 2. WebCodecs check ────────────────────────────────────────────────────
     if (typeof VideoEncoder === 'undefined') {
-        throw new Error('WebCodecs is not supported in this browser. Please use Chrome 94+ or Edge 94+.');
+        throw new Error('WebCodecs not supported. Please use Chrome 94+ or Edge 94+.');
     }
 
-    // ── 3. Resolve best H.264 profile for this GPU ────────────────────────────
-    const { codec: videoCodec, hardwareAcceleration } = await resolveH264Codec(width, height);
-    const videoBitrate = getVideoBitrate(width, height);
-
-    const videoEncoderConfig: VideoEncoderConfig = {
-        codec: videoCodec,
-        width, height,
-        bitrate: videoBitrate,
-        bitrateMode: 'constant',   // CBR → predictable quality throughout
-        framerate: FPS,
-        hardwareAcceleration,
-        latencyMode: 'quality',    // Maximise quality over latency
-        // Request full-range color to avoid gamut compression in the encoder
-    };
-
-    // ── 4. Set up MP4 muxer ───────────────────────────────────────────────────
-    const muxer = new Muxer({
-        target: new ArrayBufferTarget(),
-        video: {
-            codec: 'avc',          // H.264 in MP4
-            width, height,
-            frameRate: FPS,
-        },
-        audio: {
+    // ── 3. Probe AAC support → choose MP4 or WebM ────────────────────────────
+    let useAAC = false;
+    try {
+        const probe = await AudioEncoder.isConfigSupported({
             codec: 'aac',
             sampleRate: encBuf.sampleRate,
             numberOfChannels: numChannels,
-        },
-        firstTimestampBehavior: 'offset',
-        fastStart: 'in-memory',    // Writes moov atom first → instant playback
-    });
+            bitrate: 256_000,
+        });
+        useAAC = probe.supported === true;
+    } catch { useAAC = false; }
 
-    // ── 5. Set up VideoEncoder (H.264 GPU path) ───────────────────────────────
+    // ── 4. Set up video encoder config ────────────────────────────────────────
+    let videoCodecStr: string;
+    let videoHW: HardwareAcceleration;
+
+    if (useAAC) {
+        const resolved = await resolveH264Codec(width, height);
+        videoCodecStr = resolved.codec;
+        videoHW = resolved.hardwareAcceleration;
+    } else {
+        videoCodecStr = 'vp09.00.10.08';
+        videoHW = 'prefer-software';
+    }
+
+    const videoEncoderConfig: VideoEncoderConfig = {
+        codec: videoCodecStr,
+        width, height,
+        bitrate: getVideoBitrate(width, height),
+        bitrateMode: 'constant',
+        framerate: FPS,
+        hardwareAcceleration: videoHW,
+        latencyMode: 'quality',
+    };
+
+    // ── 5. Set up muxer (MP4+AAC  or  WebM+Opus) ─────────────────────────────
+    type AddVideo = (c: EncodedVideoChunk, m: EncodedVideoChunkMetadata) => void;
+    type AddAudio = (c: EncodedAudioChunk, m: EncodedAudioChunkMetadata) => void;
+
+    let addVideoChunk!: AddVideo;
+    let addAudioChunk!: AddAudio;
+    let finalizeMuxer!: () => ArrayBuffer;
+    let outputMimeType!: string;
+    let outputExt!: string;
+
+    if (useAAC) {
+        const { Muxer: Mp4Muxer, ArrayBufferTarget: Mp4Target } = await import('mp4-muxer');
+        const mp4Target = new Mp4Target();
+        const mp4 = new Mp4Muxer({
+            target: mp4Target,
+            video: { codec: 'avc', width, height, frameRate: FPS },
+            audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+            firstTimestampBehavior: 'offset',
+            fastStart: 'in-memory',
+        });
+        addVideoChunk = (c, m) => mp4.addVideoChunk(c, m);
+        addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
+        finalizeMuxer = () => { mp4.finalize(); return (mp4Target as any).buffer as ArrayBuffer; };
+        outputMimeType = 'video/mp4';
+        outputExt = 'mp4';
+    } else {
+        const { Muxer: WebmMuxer, ArrayBufferTarget: WebmTarget } = await import('webm-muxer');
+        const webmTarget = new WebmTarget();
+        const webm = new WebmMuxer({
+            target: webmTarget,
+            video: { codec: 'V_VP9', width, height, frameRate: FPS },
+            audio: { codec: 'A_OPUS', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+            firstTimestampBehavior: 'offset',
+        });
+        addVideoChunk = (c, m) => webm.addVideoChunk(c, m);
+        addAudioChunk = (c, m) => webm.addAudioChunk(c, m);
+        finalizeMuxer = () => { webm.finalize(); return (webmTarget as any).buffer as ArrayBuffer; };
+        outputMimeType = 'video/webm';
+        outputExt = 'webm';
+    }
+
+    // ── 6. Video encoder ──────────────────────────────────────────────────────
     let videoError: Error | null = null;
     const videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta!),
+        output: (chunk, meta) => addVideoChunk(chunk, meta!),
         error: (e) => { videoError = e; },
     });
     videoEncoder.configure(videoEncoderConfig);
 
-    // ── 6. Encode all audio (runs completely in parallel with video rendering) ─
-    //   We kick it off NOW and don't await — it runs concurrently while
-    //   the frame render loop below uses the CPU/GPU.
+    // ── 7. Audio encoder + feed all audio chunks now (runs in parallel) ───────
+    const audioCodecStr = useAAC ? 'aac' : 'opus';
     let audioError: Error | null = null;
     const audioEncoder = new AudioEncoder({
-        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta!),
+        output: (chunk, meta) => addAudioChunk(chunk, meta!),
         error: (e) => { audioError = e; },
     });
     audioEncoder.configure({
-        codec: 'aac',
+        codec: audioCodecStr,
         sampleRate: encBuf.sampleRate,
         numberOfChannels: numChannels,
-        bitrate: 320_000,
+        bitrate: useAAC ? 320_000 : 256_000,
     });
 
-    const AUDIO_CHUNK = encBuf.sampleRate;
+    const AUDIO_CHUNK = encBuf.sampleRate; // 1 sec per chunk
     for (let c = 0; c * AUDIO_CHUNK < encBuf.length; c++) {
         if (audioError) throw audioError;
         const start = c * AUDIO_CHUNK;
@@ -388,11 +427,8 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         const count = end - start;
         const planar = new Float32Array(count * numChannels);
         for (let ch = 0; ch < numChannels; ch++) {
-            // If the buffer has fewer channels than numChannels, duplicate ch0
-            const src = ch < encBuf.numberOfChannels
-                ? encBuf.getChannelData(ch).subarray(start, end)
-                : encBuf.getChannelData(0).subarray(start, end);
-            planar.set(src, ch * count);
+            const srcCh = ch < encBuf.numberOfChannels ? ch : 0;
+            planar.set(encBuf.getChannelData(srcCh).subarray(start, end), ch * count);
         }
         const ad = new AudioData({
             format: 'f32-planar',
@@ -405,13 +441,11 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         audioEncoder.encode(ad);
         ad.close();
     }
-    // (audioEncoder.flush() is awaited later — encoding runs async in background)
 
-    // ── 7. Canvas setup ───────────────────────────────────────────────────────
+    // ── 8. Canvas ─────────────────────────────────────────────────────────────
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    // `desynchronized: true` lets the browser skip unnecessary GPU sync barriers
     const ctx = canvas.getContext('2d', { willReadFrequently: false, desynchronized: true })!;
 
     const state: RenderState = {
@@ -421,47 +455,35 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         smoothedMags: new Float32Array(FFT_SIZE >> 1),
     };
 
-    // ── 8. Render + encode frames (deep pipeline) ─────────────────────────────
+    // ── 9. Render + encode frames ─────────────────────────────────────────────
     const startTime = performance.now();
-    const GOP = FPS * 2; // keyframe every 2 sec
 
     for (let fi = 0; fi < totalFrames; fi++) {
         if (signal.aborted) break;
         if (videoError) throw videoError;
         if (audioError) throw audioError;
 
-        // Backpressure: pause rendering when the encoder queue is deep enough.
-        // PIPELINE_DEPTH=12 keeps the GPU hardware encoder fully saturated
-        // without ballooning memory usage.
+        // Backpressure — keep GPU pipeline full but not OOM
         while (videoEncoder.encodeQueueSize > PIPELINE_DEPTH) {
             await new Promise<void>(r => setTimeout(r, 0));
         }
 
-        // --- Compute FFT data for this frame ---
         const sampleOffset = Math.floor((fi / FPS) * originalBuffer.sampleRate);
         const dataArray = getByteFrequencyData(monoPCM, sampleOffset, FFT_SIZE, state.smoothedMags);
 
-        // --- Render frame to canvas ---
         renderExportFrame(ctx, width, height, dataArray, settings, state, bgImg, centerImg, logoImg);
 
-        // --- Wrap canvas in a VideoFrame (zero-copy on most browsers) ---
-        const timestampUs = Math.round((fi / FPS) * 1_000_000);
-        const frame = new VideoFrame(canvas, {
-            timestamp: timestampUs,
-            duration: Math.round(1_000_000 / FPS),
-        });
-
-        // --- Push to encoder (GPU takes it from here) ---
+        const tsUs = Math.round((fi / FPS) * 1_000_000);
+        const frame = new VideoFrame(canvas, { timestamp: tsUs, duration: Math.round(1_000_000 / FPS) });
         videoEncoder.encode(frame, { keyFrame: fi % GOP === 0 });
-        frame.close(); // release GPU-side texture reference immediately
+        frame.close();
 
-        // --- Progress reporting (every 10 frames ~= 6× per second at 60fps) ---
         if (fi % 10 === 0) {
             await new Promise<void>(r => setTimeout(r, 0));
             const elapsed = (performance.now() - startTime) / 1000;
             const videoSec = fi / FPS;
             const speedX = elapsed > 0.5 ? +(videoSec / elapsed).toFixed(1) : 0;
-            onProgress((fi / totalFrames) * 95, speedX); // leave 5% for flush
+            onProgress((fi / totalFrames) * 95, speedX);
         }
     }
 
@@ -471,26 +493,21 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         return;
     }
 
-    // ── 9. Flush both encoders (concurrent) ───────────────────────────────────
-    await Promise.all([
-        videoEncoder.flush(),
-        audioEncoder.flush(),
-    ]);
-
+    // ── 10. Flush encoders (concurrent) ──────────────────────────────────────
+    await Promise.all([videoEncoder.flush(), audioEncoder.flush()]);
     if (videoError) throw videoError;
     if (audioError) throw audioError;
-
     videoEncoder.close();
     audioEncoder.close();
-    muxer.finalize();
 
-    // ── 10. Download ──────────────────────────────────────────────────────────
-    const { buffer } = muxer.target as ArrayBufferTarget;
-    const blob = new Blob([buffer], { type: 'video/mp4' });
+    const outputBuffer = finalizeMuxer();
+
+    // ── 11. Download ──────────────────────────────────────────────────────────
+    const blob = new Blob([outputBuffer], { type: outputMimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `sonic-visualizer-${width}x${height}.mp4`;
+    a.download = `sonic-visualizer-${width}x${height}.${outputExt}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
