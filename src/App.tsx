@@ -4,12 +4,12 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Download, X, User } from 'lucide-react';
+import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Download, X, User, RotateCcw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Types
-type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'spikes' | 'laser' | 'nebula';
-type CenterMode = 'text' | 'profile' | 'logo';
+type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'spikes' | 'laser' | 'nebula' | 'aura';
+type CenterMode = 'logo' | 'profile' | 'text' | 'none';
 
 interface VisualizerSettings {
   primaryColor: string;
@@ -34,6 +34,7 @@ interface VisualizerSettings {
   shakeEnabled: boolean;
   echoEnabled: boolean;
   invertColors: boolean;
+  bgParticlesEnabled: boolean;
   performanceMode: boolean;
 }
 
@@ -286,6 +287,7 @@ export default function App() {
     shakeEnabled: false,
     echoEnabled: false,
     invertColors: false,
+    bgParticlesEnabled: false,
     performanceMode: false,
   });
 
@@ -402,6 +404,9 @@ export default function App() {
 
   const [cropSrc, setCropSrc] = useState<string | null>(null);
 
+  // Used to physically shake the entire screen DOM
+  const [shakeOffset, setShakeOffset] = useState({ x: 0, y: 0 });
+
   const handleCenterImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -471,6 +476,7 @@ export default function App() {
     let rotation = 0;
     let particles: { x: number, y: number, speed: number, angle: number, life: number, color: string, wobbleOffset?: number }[] = [];
     let nebParticles: { x: number, y: number, vx: number, vy: number, life: number, size: number, color: string }[] = [];
+    let bgParticles: { x: number, y: number, vx: number, vy: number, life: number, size: number, color: string }[] = [];
     const dataArray = new Uint8Array(1024);
     let colorCycleHue = 0;
     let lastFrameTime = 0;
@@ -541,6 +547,51 @@ export default function App() {
       const centerX = virtualWidth / 2;
       const centerY = virtualHeight / 2;
 
+      // Draw background particles (behind everything else)
+      if (s.bgParticlesEnabled) {
+        let bassEnergy = 0;
+        for (let i = 0; i < 10; i++) bassEnergy += dataArray[i];
+        bassEnergy = bassEnergy / 10 / 255;
+
+        // Spawn new background particles
+        if (bgParticles.length < 150 && Math.random() < 0.3) {
+          bgParticles.push({
+            x: Math.random() * virtualWidth,
+            y: Math.random() * virtualHeight,
+            vx: (Math.random() - 0.5) * 0.5 * (1 + bassEnergy * 2),
+            vy: (Math.random() - 0.5) * 0.5 * (1 + bassEnergy * 2) - 0.5, // Drift slightly up
+            life: Math.random() * 0.5 + 0.5,
+            size: Math.random() * 2 + 0.5,
+            color: Math.random() > 0.5 ? s.primaryColor : s.secondaryColor
+          });
+        }
+
+        ctx.save();
+        for (let i = bgParticles.length - 1; i >= 0; i--) {
+          const p = bgParticles[i];
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life -= 0.002;
+
+          if (p.x < 0) p.x = virtualWidth;
+          if (p.x > virtualWidth) p.x = 0;
+          if (p.y < 0) p.y = virtualHeight;
+          if (p.y > virtualHeight) p.y = 0;
+
+          if (p.life <= 0) {
+            bgParticles.splice(i, 1);
+            continue;
+          }
+
+          ctx.globalAlpha = p.life * 0.4 * (1 + bassEnergy); // Reacts to bass slightly
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
       // Calculate Bass for Pulse and Shake
       let bassTotal = 0;
       let maxBass = 0;
@@ -560,13 +611,20 @@ export default function App() {
         shakeY = (Math.random() - 0.5) * 30 * intensity;
       }
 
+      // We apply shake to React state so DOM nodes (Canvas + BG Image) both shake. 
+      // Only trigger React re-render if we are actively shaking OR if we need to reset back to 0.
+      setShakeOffset(prev => {
+        if (shakeX === 0 && shakeY === 0 && prev.x === 0 && prev.y === 0) return prev;
+        return { x: shakeX, y: shakeY };
+      });
+
       // Rotation
       rotation += s.rotationSpeed * 0.01;
 
       ctx.save();
       if (s.invertColors) ctx.filter = 'invert(1) hue-rotate(180deg)';
 
-      ctx.translate(centerX + shakeX, centerY + shakeY);
+      ctx.translate(centerX, centerY);
       ctx.rotate(rotation);
       ctx.translate(-centerX, -centerY);
 
@@ -598,6 +656,7 @@ export default function App() {
         else if (s.type === 'spikes') drawSpikes(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
         else if (s.type === 'laser') drawLaser(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
         else if (s.type === 'nebula') drawNebula(ctx, dataArray, centerX, centerY, currentRadius, nebParticles, vizSettings);
+        else if (s.type === 'aura') drawAura(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
 
         ctx.restore();
       };
@@ -1122,22 +1181,79 @@ export default function App() {
     ctx.globalAlpha = 1;
   };
 
+  // ─── Aura ─────────────────────────────────────────────────────────────────
+  const drawAura = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    const points = 180;
+    const effectivePoints = s.mirror ? points / 2 : points;
+    const step = Math.floor(data.length / effectivePoints);
+
+    ctx.beginPath();
+
+    // Draw outer peaks
+    for (let i = 0; i <= points; i++) {
+      let dataIndex;
+      if (s.mirror) {
+        if (i <= points / 2) dataIndex = i * step;
+        else dataIndex = (points - i) * step;
+      } else {
+        dataIndex = i * step;
+      }
+
+      const value = data[dataIndex] || 0;
+      // Exponential scaling for flatter valleys and sharper peaks (Trap style)
+      const percent = Math.pow(value / 255, 2.5);
+      const height = percent * 200 * s.sensitivity;
+
+      // Start at bottom (+ PI/2) so the main bass energy splits symmetrically downwards
+      const angle = (i / points) * Math.PI * 2 + Math.PI / 2;
+      const r = radius + height;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+
+    // Connect back along the inner radius to form a continuous filled polygon
+    ctx.arc(cx, cy, radius, Math.PI * 2 + Math.PI / 2, Math.PI / 2, true);
+    ctx.closePath();
+
+    // Create Gradient for fill
+    const gradient = ctx.createLinearGradient(cx, cy - radius - 200, cx, cy + radius + 200);
+    gradient.addColorStop(0, s.primaryColor);
+    gradient.addColorStop(1, s.secondaryColor);
+
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // White/Bright border on the outside
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  };
+
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden font-sans text-white">
       {/* Background Layer */}
       <div
-        className="absolute inset-0 z-0 bg-cover bg-center transition-all duration-500"
+        className="absolute inset-[-50px] z-0 bg-cover bg-center"
         style={{
           backgroundImage: bgImage ? `url(${bgImage})` : 'none',
           filter: `blur(${settings.bgBlur}px)`,
-          opacity: settings.bgOpacity
+          opacity: settings.bgOpacity,
+          transform: `translate(${shakeOffset.x}px, ${shakeOffset.y}px)`,
+          willChange: 'transform' // Hardware acceleration for fast shaking
         }}
       />
 
       {/* Canvas Layer */}
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 z-10"
+        className="absolute inset-[-50px] z-10"
+        style={{
+          transform: `translate(${shakeOffset.x}px, ${shakeOffset.y}px)`,
+          willChange: 'transform'
+        }}
       />
 
       {/* Audio Element (Hidden) */}
@@ -1371,9 +1487,23 @@ export default function App() {
                   <button onClick={() => setSettings(s => ({ ...s, type: 'spikes' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'spikes' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Spikes</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'laser' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'laser' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Laser</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'nebula' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'nebula' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Nebula</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'aura' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'aura' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Aura</button>
                 </div>
 
-                <div className="flex items-center justify-between pt-4 pb-2 border-b border-white/5">
+                <div className="flex items-center justify-between pt-1 pb-2 border-b border-white/5">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Particles Overlay</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Floating background dust</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, bgParticlesEnabled: !s.bgParticlesEnabled }))}
+                    className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${settings.bgParticlesEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.bgParticlesEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 pb-2">
                   <label className="text-sm font-medium text-neutral-300">Mirror Spectrum</label>
                   <button
                     onClick={() => setSettings(s => ({ ...s, mirror: !s.mirror }))}
@@ -1475,9 +1605,18 @@ export default function App() {
               {/* Sliders */}
               <div className="space-y-4 px-1 pb-4">
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs font-medium">
+                  <div className="flex justify-between items-center text-xs font-medium">
                     <label className="text-neutral-400">Rotation Speed</label>
-                    <span className="text-white">{settings.rotationSpeed}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white">{settings.rotationSpeed}</span>
+                      <button
+                        onClick={() => setSettings(s => ({ ...s, rotationSpeed: 0 }))}
+                        className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
+                        title="Reset to default (0)"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="range"
@@ -1491,9 +1630,18 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs font-medium">
+                  <div className="flex justify-between items-center text-xs font-medium">
                     <label className="text-neutral-400">Visualize Radius</label>
-                    <span className="text-white">{settings.radius}px</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white">{settings.radius}px</span>
+                      <button
+                        onClick={() => setSettings(s => ({ ...s, radius: 150 }))}
+                        className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
+                        title="Reset to default (150)"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="range"
@@ -1506,9 +1654,18 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs font-medium">
+                  <div className="flex justify-between items-center text-xs font-medium">
                     <label className="text-neutral-400">Audio Sensitivity</label>
-                    <span className="text-white">{settings.sensitivity}x</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white">{settings.sensitivity}x</span>
+                      <button
+                        onClick={() => setSettings(s => ({ ...s, sensitivity: 1.5 }))}
+                        className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
+                        title="Reset to default (1.5x)"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="range"
