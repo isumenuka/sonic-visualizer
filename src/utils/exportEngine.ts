@@ -307,7 +307,11 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     }
 
     // Mono PCM for FFT (at original sample rate for accurate timestamp alignment)
-    const ch0 = originalBuffer.getChannelData(0);
+    // Clamp channel count — guard against files that report 0 channels (causes AudioEncoder crash).
+    // Cap at 2 so we always produce stereo-or-below AAC which every decoder supports.
+    const numChannels = Math.max(1, Math.min(2, encBuf.numberOfChannels || 1));
+
+    const ch0 = originalBuffer.numberOfChannels > 0 ? originalBuffer.getChannelData(0) : new Float32Array(originalBuffer.length);
     const ch1 = originalBuffer.numberOfChannels > 1 ? originalBuffer.getChannelData(1) : ch0;
     const monoPCM = new Float32Array(ch0.length);
     for (let i = 0; i < ch0.length; i++) monoPCM[i] = (ch0[i] + ch1[i]) / 2;
@@ -347,7 +351,7 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         audio: {
             codec: 'aac',
             sampleRate: encBuf.sampleRate,
-            numberOfChannels: encBuf.numberOfChannels,
+            numberOfChannels: numChannels,
         },
         firstTimestampBehavior: 'offset',
         fastStart: 'in-memory',    // Writes moov atom first → instant playback
@@ -372,25 +376,29 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     audioEncoder.configure({
         codec: 'aac',
         sampleRate: encBuf.sampleRate,
-        numberOfChannels: encBuf.numberOfChannels,
-        bitrate: 320_000,           // 320 kbps AAC — transparent quality
+        numberOfChannels: numChannels,
+        bitrate: 320_000,
     });
 
-    const AUDIO_CHUNK = encBuf.sampleRate; // 1 second per chunk
+    const AUDIO_CHUNK = encBuf.sampleRate;
     for (let c = 0; c * AUDIO_CHUNK < encBuf.length; c++) {
         if (audioError) throw audioError;
         const start = c * AUDIO_CHUNK;
         const end = Math.min(start + AUDIO_CHUNK, encBuf.length);
         const count = end - start;
-        const planar = new Float32Array(count * encBuf.numberOfChannels);
-        for (let ch = 0; ch < encBuf.numberOfChannels; ch++) {
-            planar.set(encBuf.getChannelData(ch).subarray(start, end), ch * count);
+        const planar = new Float32Array(count * numChannels);
+        for (let ch = 0; ch < numChannels; ch++) {
+            // If the buffer has fewer channels than numChannels, duplicate ch0
+            const src = ch < encBuf.numberOfChannels
+                ? encBuf.getChannelData(ch).subarray(start, end)
+                : encBuf.getChannelData(0).subarray(start, end);
+            planar.set(src, ch * count);
         }
         const ad = new AudioData({
             format: 'f32-planar',
             sampleRate: encBuf.sampleRate,
             numberOfFrames: count,
-            numberOfChannels: encBuf.numberOfChannels,
+            numberOfChannels: numChannels,
             timestamp: Math.round((start / encBuf.sampleRate) * 1_000_000),
             data: planar,
         });
