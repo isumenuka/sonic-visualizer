@@ -2,19 +2,37 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# Sonic Visualizer
 
-This contains everything you need to run your app locally.
+A premium, modern, customizable Audio Visualizer built with React, Tailwind CSS, and HTML5 Canvas.
 
-View your app in AI Studio: https://ai.studio/apps/8736dc5e-c790-4d1e-82e0-69fd0b1caf97
+## Features
 
-## Run Locally
+- **8 Unique Visualizer Engines**: Select perfectly synced audio reactive shapes.
+  - Bars, Wave, Spiral, Particles
+  - Ring, Strings, Orbit, Fireflies
+- **Floating Minimalism**: Uses a macOS-inspired floating dock and a frosted glass translucent settings panel for a clean viewing experience.
+- **Custom Backdrops**: Upload your own background images with adjustable blur and opacity filters.
+- **Center Profiles**: Personalize the center with a custom cropped profile image or typed custom text.
+- **Color Extraction**: Automatically extracts primary and secondary colors from your uploaded pictures to theme the visualizer dynamically, or set your own via color pickers.
+- **Real-time Tweaks**: Adjust mirror spectrums, beat pulsing, rotation speeds, base radii, and audio sensitivity on the fly without interrupting playback.
 
-**Prerequisites:**  Node.js
+## Getting Started
 
+**Prerequisites:** Node.js
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+2. Run the development server locally:
+   ```bash
+   npm run dev
+   ```
+
+## Usage
+
+1. Click the center **Music** icon or the **Music upload** button in the floating dock to load a local audio file.
+2. Select the **Settings** gear in the dock to open the Appearance panel.
+3. Use the other bottom dock buttons to upload custom Background images or custom Profile center pictures.
+4. Experiment with visualizer varieties, rotations, and custom color tracking. Enjoy the show!

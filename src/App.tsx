@@ -8,7 +8,7 @@ import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Downloa
 import { motion, AnimatePresence } from 'motion/react';
 
 // Types
-type VisualizerType = 'bars' | 'wave' | 'circle' | 'particles' | 'spiral';
+type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'fireflies';
 type CenterMode = 'text' | 'profile' | 'logo';
 
 interface VisualizerSettings {
@@ -464,6 +464,14 @@ export default function App() {
         drawSpiral(ctx, dataArray, centerX, centerY, currentRadius, s);
       } else if (s.type === 'particles') {
         drawParticles(ctx, dataArray, centerX, centerY, currentRadius, particles, s);
+      } else if (s.type === 'ring') {
+        drawRing(ctx, dataArray, centerX, centerY, currentRadius, s);
+      } else if (s.type === 'strings') {
+        drawStrings(ctx, dataArray, centerX, centerY, currentRadius, s);
+      } else if (s.type === 'orbit') {
+        drawOrbit(ctx, dataArray, centerX, centerY, currentRadius, s);
+      } else if (s.type === 'fireflies') {
+        drawFireflies(ctx, dataArray, centerX, centerY, currentRadius, particles, s);
       }
 
       ctx.restore(); // Restore rotation context
@@ -642,6 +650,167 @@ export default function App() {
 
     // Draw base circle wave as well for context
     drawCircularWave(ctx, data, cx, cy, radius, s);
+  };
+
+  const drawRing = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    let bassTotal = 0;
+    for (let i = 0; i < 20; i++) bassTotal += data[i];
+    const bassAverage = bassTotal / 20;
+    const pulseOffset = (bassAverage / 255) * 100 * s.sensitivity;
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + pulseOffset, 0, Math.PI * 2);
+    ctx.strokeStyle = s.primaryColor;
+    ctx.lineWidth = s.barWidth * 2;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + pulseOffset + 15, 0, Math.PI * 2);
+    ctx.strokeStyle = s.secondaryColor;
+    ctx.lineWidth = s.barWidth;
+    ctx.globalAlpha = 0.5;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  };
+
+  const drawStrings = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    const points = 60;
+    const step = Math.floor(data.length / points);
+    const coords: { x: number, y: number }[] = [];
+
+    for (let i = 0; i < points; i++) {
+      const value = data[i * step] || 0;
+      const percent = value / 255;
+      const offset = percent * 80 * s.sensitivity;
+      const r = radius + offset;
+      const angle = (i / points) * Math.PI * 2;
+      coords.push({
+        x: cx + Math.cos(angle) * r,
+        y: cy + Math.sin(angle) * r
+      });
+    }
+
+    ctx.strokeStyle = s.primaryColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+
+    // Connect every point to several other points across the circle
+    for (let i = 0; i < points; i++) {
+      for (let j = i + 1; j < points; j += 7) {
+        if (Math.abs(i - j) > 3) {
+          const p1 = coords[i];
+          const p2 = coords[j];
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+        }
+      }
+    }
+    ctx.stroke();
+
+    // Outline
+    ctx.strokeStyle = s.secondaryColor;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= points; i++) {
+      const p = coords[i % points];
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  };
+
+  const drawOrbit = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    const orbs = 24;
+    const step = Math.floor(data.length / orbs);
+    const time = Date.now() * 0.001;
+
+    for (let i = 0; i < orbs; i++) {
+      const value = data[i * step] || 0;
+      const percent = value / 255;
+      const dist = radius + 20 + (percent * 150 * s.sensitivity);
+      const angle = (i / orbs) * Math.PI * 2 + (time * (i % 2 === 0 ? 1 : -1) * 0.5);
+
+      const x = cx + Math.cos(angle) * dist;
+      const y = cy + Math.sin(angle) * dist;
+
+      ctx.beginPath();
+      ctx.arc(x, y, 4 + percent * 10, 0, Math.PI * 2);
+      ctx.fillStyle = i % 2 === 0 ? s.primaryColor : s.secondaryColor;
+      ctx.fill();
+
+      if (percent > 0.5) {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(x, y);
+        ctx.strokeStyle = s.primaryColor;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.2;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Base ring
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = s.secondaryColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  };
+
+  const drawFireflies = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, particles: any[], s: VisualizerSettings) => {
+    // Fireflies don't die instantly and they move in sine waves
+    const bass = data[0];
+    if (bass > 180 && particles.length < 100 && Math.random() > 0.5) {
+      for (let i = 0; i < 3; i++) {
+        particles.push({
+          x: cx + (Math.random() - 0.5) * 50,
+          y: cy + (Math.random() - 0.5) * 50,
+          angle: Math.random() * Math.PI * 2,
+          speed: Math.random() * 1 + 0.5,
+          life: 2 + Math.random() * 2,
+          color: Math.random() > 0.3 ? s.primaryColor : '#ffffff',
+          wobbleOffset: Math.random() * Math.PI * 2
+        });
+      }
+    }
+
+    const time = Date.now() * 0.005;
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.angle += Math.sin(time + p.wobbleOffset) * 0.05;
+      p.x += Math.cos(p.angle) * p.speed + Math.sin(time * 0.5) * 0.5;
+      p.y += Math.sin(p.angle) * p.speed + Math.cos(time * 0.5) * 0.5;
+      p.life -= 0.01;
+
+      if (p.life <= 0) {
+        particles.splice(i, 1);
+        continue;
+      }
+
+      const dist = Math.sqrt(Math.pow(p.x - cx, 2) + Math.pow(p.y - cy, 2));
+      const distPercent = Math.min(dist / (radius + 200), 1);
+
+      ctx.globalAlpha = Math.min(p.life, 1) * distPercent;
+
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = p.color;
+      ctx.fillStyle = p.color;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2 + Math.sin(time + p.wobbleOffset) * 1, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+
+      if (dist < radius) {
+        const pushAngle = Math.atan2(p.y - cy, p.x - cx);
+        p.x += Math.cos(pushAngle) * 2;
+        p.y += Math.sin(pushAngle) * 2;
+      }
+    }
   };
 
   return (
@@ -827,6 +996,10 @@ export default function App() {
                   <button onClick={() => setSettings(s => ({ ...s, type: 'wave' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'wave' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Wave</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'spiral' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'spiral' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Spiral</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'particles' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'particles' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Particles</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'ring' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'ring' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Ring</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'strings' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'strings' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Strings</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'orbit' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'orbit' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Orbit</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'fireflies' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'fireflies' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Fireflies</button>
                 </div>
 
                 <div className="flex items-center justify-between pt-2">
