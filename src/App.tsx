@@ -247,7 +247,7 @@ export default function App() {
   const [logoImage, setLogoImage] = useState<string | null>(null);     // Used for Logo mode
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
-  const [isRecording, setIsRecording] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -287,20 +287,35 @@ export default function App() {
 
   const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
 
-  const startRecording = () => {
+  const exportVideo = async () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const audio = audioRef.current;
+    if (!canvas || !audio || !audioFile) return;
+
+    setIsExporting(true);
     recordedChunksRef.current = [];
 
+    // Ensure AudioContext is ready
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      analyserRef.current = audioContextRef.current.createAnalyser();
+      analyserRef.current.fftSize = 2048;
+      sourceRef.current = audioContextRef.current.createMediaElementSource(audio);
+      sourceRef.current.connect(analyserRef.current);
+      analyserRef.current.connect(audioContextRef.current.destination);
+    }
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume();
+    }
+
     const [w, h] = resolutionMap[recordingQuality];
-    // Temporarily stretch the canvas to the target resolution
     canvas.width = w;
     canvas.height = h;
 
     const stream = canvas.captureStream(60);
 
     // Mix audio into the recording stream
-    if (audioRef.current && audioContextRef.current) {
+    if (audioContextRef.current) {
       const dest = audioContextRef.current.createMediaStreamDestination();
       if (analyserRef.current) analyserRef.current.connect(dest);
       const audioTrack = dest.stream.getAudioTracks()[0];
@@ -321,20 +336,21 @@ export default function App() {
       a.download = `sonic-visualizer-${recordingQuality}.webm`;
       a.click();
       URL.revokeObjectURL(url);
-      // Restore canvas to window size
       if (canvasRef.current) {
         canvasRef.current.width = window.innerWidth;
         canvasRef.current.height = window.innerHeight;
       }
+      setIsExporting(false);
+      setIsPlaying(false);
     };
-    mr.start();
-    mediaRecorderRef.current = mr;
-    setIsRecording(true);
-  };
 
-  const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-    setIsRecording(false);
+    // Start from beginning and auto-stop when audio ends
+    audio.currentTime = 0;
+    audio.onended = () => { mr.stop(); audio.onended = () => setIsPlaying(false); };
+    mr.start();
+    audio.play();
+    setIsPlaying(true);
+    mediaRecorderRef.current = mr;
   };
 
   // Initialize Audio Context
@@ -960,7 +976,7 @@ export default function App() {
             <button
               key={q}
               onClick={() => setRecordingQuality(q)}
-              disabled={isRecording}
+              disabled={isExporting}
               className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider transition-all ${recordingQuality === q ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
             >
               {q}
@@ -968,14 +984,30 @@ export default function App() {
           ))}
         </div>
 
-        {/* Record / Stop Button */}
+        {/* Export Button */}
         <button
-          onClick={isRecording ? stopRecording : startRecording}
-          className={`relative p-3 rounded-full transition-all group ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-white/10 text-neutral-300 hover:text-red-400'}`}
+          onClick={exportVideo}
+          disabled={!audioFile || isExporting}
+          className={`relative p-3 rounded-full transition-all group flex items-center gap-1.5 pr-4 pl-3 ${isExporting
+              ? 'bg-white/10 text-neutral-400 cursor-not-allowed'
+              : audioFile
+                ? 'hover:bg-white text-neutral-300 hover:text-black border border-white/20'
+                : 'text-neutral-600 cursor-not-allowed'
+            }`}
         >
-          <div className={`w-4 h-4 rounded-full transition-all ${isRecording ? 'bg-white scale-75' : 'bg-red-500'}`} />
+          {isExporting ? (
+            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          ) : (
+            <Download className="w-4 h-4" />
+          )}
+          <span className="text-[11px] font-semibold tracking-wide">
+            {isExporting ? 'Exporting…' : 'Export'}
+          </span>
           <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
-            {isRecording ? 'Stop & Save' : `Record ${recordingQuality.toUpperCase()}`}
+            {isExporting ? 'Playing & capturing…' : `Export as ${recordingQuality.toUpperCase()} video`}
           </div>
         </button>
       </div>
