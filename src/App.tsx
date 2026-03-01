@@ -8,7 +8,7 @@ import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Downloa
 import { motion, AnimatePresence } from 'motion/react';
 
 // Types
-type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'fireflies';
+type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'spikes' | 'laser' | 'nebula';
 type CenterMode = 'text' | 'profile' | 'logo';
 
 interface VisualizerSettings {
@@ -21,13 +21,20 @@ interface VisualizerSettings {
   centerMode: CenterMode;
   centerText: string;
   centerTextSize: number;
-  centerColor: string; // New: Background color of the center circle
-  logoScale: number;   // New: Scale for the mini logo
+  centerColor: string;
+  logoScale: number;
   bgBlur: number;
   bgOpacity: number;
   mirror: boolean;
   rotationSpeed: number;
   pulseEnabled: boolean;
+  glowEnabled: boolean;
+  trailEnabled: boolean;
+  colorCycle: boolean;
+  shakeEnabled: boolean;
+  echoEnabled: boolean;
+  invertColors: boolean;
+  performanceMode: boolean;
 }
 
 // Helper to extract colors from an image
@@ -273,6 +280,13 @@ export default function App() {
     mirror: true,
     rotationSpeed: 0,
     pulseEnabled: false,
+    glowEnabled: false,
+    trailEnabled: false,
+    colorCycle: false,
+    shakeEnabled: false,
+    echoEnabled: false,
+    invertColors: false,
+    performanceMode: false,
   });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -456,70 +470,148 @@ export default function App() {
   useEffect(() => {
     let rotation = 0;
     let particles: { x: number, y: number, speed: number, angle: number, life: number, color: string, wobbleOffset?: number }[] = [];
-    const dataArray = new Uint8Array(1024); // Safely sized array
+    let nebParticles: { x: number, y: number, vx: number, vy: number, life: number, size: number, color: string }[] = [];
+    const dataArray = new Uint8Array(1024);
+    let colorCycleHue = 0;
+    let lastFrameTime = 0;
 
-    const renderFrame = () => {
+    const renderFrame = (timestamp: number) => {
       animationRef.current = requestAnimationFrame(renderFrame);
 
       const canvas = canvasRef.current;
       if (!canvas) return;
+
+      const s = settingsRef.current;
+
+      // Performance mode: throttle to 30fps
+      const targetFps = s.performanceMode ? 30 : 60;
+      if (timestamp - lastFrameTime < 1000 / targetFps) return;
+      lastFrameTime = timestamp;
+
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+      // Performance mode: render at 50% resolution using CSS scale
+      const scale = s.performanceMode ? 0.5 : 1;
+      const targetW = Math.floor(window.innerWidth * scale);
+      const targetH = Math.floor(window.innerHeight * scale);
+      if (canvas.width !== targetW || canvas.height !== targetH) {
+        canvas.width = targetW;
+        canvas.height = targetH;
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        canvas.style.imageRendering = 'auto'; // Smooth quality drop, no retro blocking
       }
 
       if (analyserRef.current) {
+        // Performance mode: use smaller FFT window
+        if (s.performanceMode && analyserRef.current.fftSize !== 512) {
+          analyserRef.current.fftSize = 512;
+        } else if (!s.performanceMode && analyserRef.current.fftSize !== 2048) {
+          analyserRef.current.fftSize = 2048;
+        }
         analyserRef.current.getByteFrequencyData(dataArray);
       } else {
         dataArray.fill(0);
       }
 
-      // Always read the latest settings from ref (avoids stale closure)
-      const s = settingsRef.current;
+      // Color cycle: auto-shift primary hue each frame
+      if (s.colorCycle) {
+        colorCycleHue = (colorCycleHue + 0.5) % 360;
+        // We apply this via a CSS filter on the canvas ctx after saving
+      }
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // logical coordinates
+      const virtualWidth = window.innerWidth;
+      const virtualHeight = window.innerHeight;
 
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
+      ctx.save(); // Top level scale matching
+      ctx.scale(scale, scale);
 
-      // Calculate Bass for Pulse
+      // Trail: instead of solid clear, use destination-out to fade alpha so BG images show through
+      if (s.trailEnabled) {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.18)'; // Color doesn't matter, only alpha does
+        ctx.fillRect(0, 0, virtualWidth, virtualHeight);
+        ctx.globalCompositeOperation = 'source-over';
+      } else {
+        ctx.clearRect(0, 0, virtualWidth, virtualHeight);
+      }
+
+      const centerX = virtualWidth / 2;
+      const centerY = virtualHeight / 2;
+
+      // Calculate Bass for Pulse and Shake
       let bassTotal = 0;
+      let maxBass = 0;
       for (let i = 0; i < 20; i++) {
         bassTotal += dataArray[i];
+        if (dataArray[i] > maxBass) maxBass = dataArray[i];
       }
       const bassAverage = bassTotal / 20;
       const pulseScale = s.pulseEnabled ? 1 + (bassAverage / 255) * 0.2 : 1;
       const currentRadius = s.radius * pulseScale;
 
+      let shakeX = 0;
+      let shakeY = 0;
+      if (s.shakeEnabled && maxBass > 220) {
+        const intensity = (maxBass - 220) / 35; // 0 to 1 scaling based on peak
+        shakeX = (Math.random() - 0.5) * 30 * intensity;
+        shakeY = (Math.random() - 0.5) * 30 * intensity;
+      }
+
       // Rotation
       rotation += s.rotationSpeed * 0.01;
 
       ctx.save();
-      ctx.translate(centerX, centerY);
+      if (s.invertColors) ctx.filter = 'invert(1) hue-rotate(180deg)';
+
+      ctx.translate(centerX + shakeX, centerY + shakeY);
       ctx.rotate(rotation);
       ctx.translate(-centerX, -centerY);
 
-      // ── 1. Draw Visualizer FIRST (behind center circle) ─────────────────
-      if (s.type === 'bars') {
-        drawCircularBars(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'wave') {
-        drawCircularWave(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'spiral') {
-        drawSpiral(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'particles') {
-        drawParticles(ctx, dataArray, centerX, centerY, currentRadius, particles, s);
-      } else if (s.type === 'ring') {
-        drawRing(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'strings') {
-        drawStrings(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'orbit') {
-        drawOrbit(ctx, dataArray, centerX, centerY, currentRadius, s);
-      } else if (s.type === 'fireflies') {
-        drawFireflies(ctx, dataArray, centerX, centerY, currentRadius, particles, s);
+      // Glow effect: add canvas-wide blur shadow
+      if (s.glowEnabled) {
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = s.colorCycle ? `hsl(${colorCycleHue},100%,60%)` : s.primaryColor;
       }
+
+      const vizPrimaryColor = s.colorCycle ? `hsl(${colorCycleHue},100%,60%)` : s.primaryColor;
+      const vizSecondaryColor = s.colorCycle ? `hsl(${(colorCycleHue + 120) % 360},100%,60%)` : s.secondaryColor;
+      const vizSettings = s.colorCycle ? { ...s, primaryColor: vizPrimaryColor, secondaryColor: vizSecondaryColor } : s;
+
+      // Helper to render the selected visualizer so we can easily duplicate it for Echo
+      const renderSelectedVisualizer = (scaleMult: number, alpha: number) => {
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.scale(scaleMult, scaleMult);
+        ctx.translate(-centerX, -centerY);
+        ctx.globalAlpha = alpha;
+
+        if (s.type === 'bars') drawCircularBars(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'wave') drawCircularWave(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'spiral') drawSpiral(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'particles') drawParticles(ctx, dataArray, centerX, centerY, currentRadius, particles, vizSettings);
+        else if (s.type === 'ring') drawRing(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'strings') drawStrings(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'orbit') drawOrbit(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'spikes') drawSpikes(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'laser') drawLaser(ctx, dataArray, centerX, centerY, currentRadius, vizSettings);
+        else if (s.type === 'nebula') drawNebula(ctx, dataArray, centerX, centerY, currentRadius, nebParticles, vizSettings);
+
+        ctx.restore();
+      };
+
+      // ── 1. Draw Visualizer FIRST (behind center circle) ─────────────────
+      renderSelectedVisualizer(1, 1);
+
+      if (s.echoEnabled) {
+        renderSelectedVisualizer(1.2, 0.3);
+        renderSelectedVisualizer(1.5, 0.1);
+      }
+
+      // Reset glow after visualizer
+      ctx.shadowBlur = 0;
 
       // ── 2. Draw Center Circle ON TOP of the visualizer ──────────────────
       ctx.beginPath();
@@ -571,9 +663,11 @@ export default function App() {
         }
         ctx.restore();
       }
+
+      ctx.restore(); // Restore the top level scale matching
     };
 
-    renderFrame();
+    renderFrame(0);
   }, []);
 
   const drawCircularBars = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
@@ -619,6 +713,7 @@ export default function App() {
     const effectivePoints = s.mirror ? points / 2 : points;
     const step = Math.floor(data.length / effectivePoints);
 
+    // Draw a thin glowing stroke wave — no fill, no overlap with center
     ctx.beginPath();
     for (let i = 0; i <= points; i++) {
       let dataIndex;
@@ -631,7 +726,7 @@ export default function App() {
 
       const value = data[dataIndex] || 0;
       const percent = value / 255;
-      const offset = (percent * 100 * s.sensitivity);
+      const offset = percent * 100 * s.sensitivity;
       const r = radius + offset;
       const angle = (i / points) * Math.PI * 2 - Math.PI / 2;
 
@@ -642,16 +737,36 @@ export default function App() {
       else ctx.lineTo(x, y);
     }
     ctx.closePath();
-
-    const gradient = ctx.createRadialGradient(cx, cy, radius, cx, cy, radius + 150);
-    gradient.addColorStop(0, s.primaryColor);
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-
-    ctx.fillStyle = gradient;
-    ctx.fill();
-    ctx.strokeStyle = s.secondaryColor;
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = s.primaryColor;
+    ctx.lineWidth = 2.5;
     ctx.stroke();
+
+    // Second subtle inner wave ring
+    ctx.beginPath();
+    for (let i = 0; i <= points; i++) {
+      let dataIndex;
+      if (s.mirror) {
+        if (i < points / 2) dataIndex = i * step;
+        else dataIndex = (points - i) * step;
+      } else {
+        dataIndex = (i * step + 40) % data.length;
+      }
+      const value = data[dataIndex] || 0;
+      const percent = value / 255;
+      const offset = percent * 50 * s.sensitivity;
+      const r = radius + offset;
+      const angle = (i / points) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = s.secondaryColor;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.4;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   };
 
   const drawSpiral = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
@@ -683,47 +798,52 @@ export default function App() {
   };
 
   const drawParticles = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, particles: any[], s: VisualizerSettings) => {
-    // Add new particles based on bass
-    const bass = data[0]; // Low freq
-    if (bass > 200 && Math.random() > 0.5) {
-      for (let i = 0; i < 5; i++) {
+    const bass = data[0];
+    if (bass > 180 && Math.random() > 0.3) {
+      for (let i = 0; i < 8; i++) {
         particles.push({
           x: cx,
           y: cy,
           angle: Math.random() * Math.PI * 2,
-          speed: Math.random() * 5 + 2,
+          speed: (Math.random() * 6 + 3) * (bass / 255),
           life: 1,
           color: Math.random() > 0.5 ? s.primaryColor : s.secondaryColor
         });
       }
     }
 
-    // Update and draw particles
     for (let i = particles.length - 1; i >= 0; i--) {
       const p = particles[i];
       p.x += Math.cos(p.angle) * p.speed;
       p.y += Math.sin(p.angle) * p.speed;
-      p.life -= 0.02;
+      p.speed *= 0.97; // slow down
+      p.life -= 0.018;
 
-      if (p.life <= 0) {
-        particles.splice(i, 1);
-        continue;
-      }
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
 
-      // Only draw if outside radius
-      const dist = Math.sqrt(Math.pow(p.x - cx, 2) + Math.pow(p.y - cy, 2));
+      const dist = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
       if (dist > radius) {
         ctx.globalAlpha = p.life;
         ctx.fillStyle = p.color;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, 2 + (1 - p.life) * 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
     }
 
-    // Draw base circle wave as well for context
-    drawCircularWave(ctx, data, cx, cy, radius, s);
+    // Draw a minimal pulse ring so there's always something to see
+    let avgFreq = 0;
+    for (let i = 0; i < 80; i++) avgFreq += data[i];
+    avgFreq = avgFreq / 80;
+    const pulseR = radius + (avgFreq / 255) * 60 * s.sensitivity;
+    ctx.beginPath();
+    ctx.arc(cx, cy, pulseR, 0, Math.PI * 2);
+    ctx.strokeStyle = s.secondaryColor;
+    ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.3;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   };
 
   const drawRing = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
@@ -832,59 +952,174 @@ export default function App() {
     ctx.stroke();
   };
 
-  const drawFireflies = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, particles: any[], s: VisualizerSettings) => {
-    // Fireflies don't die instantly and they move in sine waves
+  const drawFireflies = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, fireflies: any[], s: VisualizerSettings) => {
     const bass = data[0];
-    if (bass > 180 && particles.length < 100 && Math.random() > 0.5) {
-      for (let i = 0; i < 3; i++) {
-        particles.push({
-          x: cx + (Math.random() - 0.5) * 50,
-          y: cy + (Math.random() - 0.5) * 50,
+    if (bass > 150 && fireflies.length < 120 && Math.random() > 0.4) {
+      for (let i = 0; i < 4; i++) {
+        fireflies.push({
+          x: cx + (Math.random() - 0.5) * radius * 2,
+          y: cy + (Math.random() - 0.5) * radius * 2,
           angle: Math.random() * Math.PI * 2,
-          speed: Math.random() * 1 + 0.5,
-          life: 2 + Math.random() * 2,
+          speed: Math.random() * 1.2 + 0.3,
+          life: 3 + Math.random() * 2,
           color: Math.random() > 0.3 ? s.primaryColor : '#ffffff',
           wobbleOffset: Math.random() * Math.PI * 2
         });
       }
     }
 
-    const time = Date.now() * 0.005;
+    const time = Date.now() * 0.004;
 
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.angle += Math.sin(time + p.wobbleOffset) * 0.05;
-      p.x += Math.cos(p.angle) * p.speed + Math.sin(time * 0.5) * 0.5;
-      p.y += Math.sin(p.angle) * p.speed + Math.cos(time * 0.5) * 0.5;
-      p.life -= 0.01;
+    for (let i = fireflies.length - 1; i >= 0; i--) {
+      const p = fireflies[i];
+      p.angle += Math.sin(time + p.wobbleOffset) * 0.04;
+      p.x += Math.cos(p.angle) * p.speed;
+      p.y += Math.sin(p.angle) * p.speed;
+      p.life -= 0.008;
 
-      if (p.life <= 0) {
-        particles.splice(i, 1);
-        continue;
+      if (p.life <= 0) { fireflies.splice(i, 1); continue; }
+
+      const dist = Math.sqrt((p.x - cx) ** 2 + (p.y - cy) ** 2);
+      // Push away from center
+      if (dist < radius + 10) {
+        const pushAngle = Math.atan2(p.y - cy, p.x - cx);
+        p.x += Math.cos(pushAngle) * 3;
+        p.y += Math.sin(pushAngle) * 3;
       }
 
-      const dist = Math.sqrt(Math.pow(p.x - cx, 2) + Math.pow(p.y - cy, 2));
-      const distPercent = Math.min(dist / (radius + 200), 1);
+      const alpha = Math.min(p.life / 3, 1) * Math.min((dist - radius) / 30, 1);
+      if (alpha <= 0) continue;
 
-      ctx.globalAlpha = Math.min(p.life, 1) * distPercent;
-
-      ctx.shadowBlur = 15;
+      ctx.globalAlpha = Math.max(alpha, 0);
+      ctx.shadowBlur = 12;
       ctx.shadowColor = p.color;
       ctx.fillStyle = p.color;
-
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 2 + Math.sin(time + p.wobbleOffset) * 1, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 1.5 + Math.abs(Math.sin(time * 2 + p.wobbleOffset)) * 1.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  };
 
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
+  // ─── Spikes ───────────────────────────────────────────────────────────────
+  const drawSpikes = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    const count = s.mirror ? 90 : 180;
+    const step = Math.floor(data.length / count);
 
-      if (dist < radius) {
-        const pushAngle = Math.atan2(p.y - cy, p.x - cx);
-        p.x += Math.cos(pushAngle) * 2;
-        p.y += Math.sin(pushAngle) * 2;
+    for (let i = 0; i < (s.mirror ? count / 2 : count) * (s.mirror ? 2 : 1); i++) {
+      let dataIndex;
+      if (s.mirror) {
+        if (i < count) dataIndex = i * step;
+        else dataIndex = (count * 2 - 1 - i) * step;
+      } else {
+        dataIndex = i * step;
+      }
+      const value = data[dataIndex] || 0;
+      const percent = value / 255;
+      const h = percent * 180 * s.sensitivity;
+      if (h < 2) continue;
+      const angle = (i / (s.mirror ? count * 2 : count)) * Math.PI * 2 - Math.PI / 2;
+      const x1 = cx + Math.cos(angle) * radius;
+      const y1 = cy + Math.sin(angle) * radius;
+      const tipX = cx + Math.cos(angle) * (radius + h);
+      const tipY = cy + Math.sin(angle) * (radius + h);
+      // Triangle spike: tip + two base points rotated ±1 degree
+      const w = 0.012; // spike width
+      const lAngle = angle - w;
+      const rAngle = angle + w;
+      const lx = cx + Math.cos(lAngle) * (radius + 2);
+      const ly = cy + Math.sin(lAngle) * (radius + 2);
+      const rx = cx + Math.cos(rAngle) * (radius + 2);
+      const ry = cy + Math.sin(rAngle) * (radius + 2);
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(lx, ly);
+      ctx.lineTo(rx, ry);
+      ctx.closePath();
+      const grad = ctx.createLinearGradient(x1, y1, tipX, tipY);
+      grad.addColorStop(0, s.secondaryColor);
+      grad.addColorStop(1, s.primaryColor);
+      ctx.fillStyle = grad;
+      ctx.globalAlpha = 0.5 + percent * 0.5;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  };
+
+  // ─── Laser ────────────────────────────────────────────────────────────────
+  const drawLaser = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
+    const rays = 36;
+    const step = Math.floor(data.length / rays);
+    for (let i = 0; i < rays; i++) {
+      const value = data[i * step] || 0;
+      const percent = value / 255;
+      if (percent < 0.05) continue;
+      const len = radius + percent * 300 * s.sensitivity;
+      const angle = (i / rays) * Math.PI * 2 - Math.PI / 2;
+
+      // Outer glowing line
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius);
+      ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+      ctx.strokeStyle = s.primaryColor;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = percent * 0.9;
+      ctx.shadowBlur = 15;
+      ctx.shadowColor = s.primaryColor;
+      ctx.stroke();
+
+      // Mirror
+      if (s.mirror) {
+        const mAngle = Math.PI - angle + Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(mAngle) * radius, cy + Math.sin(mAngle) * radius);
+        ctx.lineTo(cx + Math.cos(mAngle) * len, cy + Math.sin(mAngle) * len);
+        ctx.stroke();
       }
     }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
+  };
+
+  // ─── Nebula ───────────────────────────────────────────────────────────────
+  const drawNebula = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, nebParticles: any[], s: VisualizerSettings) => {
+    let energy = 0;
+    for (let i = 0; i < 60; i++) energy += data[i];
+    energy = energy / 60 / 255;
+
+    if (nebParticles.length < 200 && Math.random() < energy * 0.6) {
+      const angle = Math.random() * Math.PI * 2;
+      const spawnR = radius + Math.random() * 20;
+      nebParticles.push({
+        x: cx + Math.cos(angle) * spawnR,
+        y: cy + Math.sin(angle) * spawnR,
+        vx: Math.cos(angle) * (1 + energy * 4 * s.sensitivity) + (Math.random() - 0.5),
+        vy: Math.sin(angle) * (1 + energy * 4 * s.sensitivity) + (Math.random() - 0.5),
+        life: 1,
+        size: 1.5 + Math.random() * 3,
+        color: Math.random() > 0.5 ? s.primaryColor : s.secondaryColor
+      });
+    }
+
+    for (let i = nebParticles.length - 1; i >= 0; i--) {
+      const p = nebParticles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      p.life -= 0.006;
+      if (p.life <= 0) { nebParticles.splice(i, 1); continue; }
+      ctx.globalAlpha = p.life * 0.8;
+      ctx.fillStyle = p.color;
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
   };
 
   return (
@@ -911,6 +1146,23 @@ export default function App() {
         onEnded={() => setIsPlaying(false)}
         crossOrigin="anonymous"
       />
+
+      {/* Top Left Performance Toggle */}
+      <div className="fixed top-6 left-6 z-50 flex items-center gap-3 bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl px-4 py-2 hover:bg-[#0a0a0a]/90 transition-colors shadow-2xl">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${settings.performanceMode ? 'bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.8)]' : 'bg-neutral-600'}`} />
+            <label className="text-sm font-semibold text-white tracking-wide">Low-End PC Mode</label>
+          </div>
+          <p className="text-[10px] text-neutral-400 mt-0.5 ml-4">Lower quality, better performance</p>
+        </div>
+        <button
+          onClick={() => setSettings(s => ({ ...s, performanceMode: !s.performanceMode }))}
+          className={`ml-2 shrink-0 w-11 h-6 rounded-full relative transition-colors ${settings.performanceMode ? 'bg-orange-500' : 'bg-neutral-800 border border-neutral-600'}`}
+        >
+          <div className={`absolute top-1 left-1 w-4 h-4 rounded-full transition-transform ${settings.performanceMode ? 'bg-white translate-x-5' : 'bg-neutral-400 translate-x-0'}`} />
+        </button>
+      </div>
 
       {/* Floating Bottom Dock */}
       <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 bg-[#0a0a0a]/80 backdrop-blur-3xl border border-white/10 rounded-full p-2.5 flex items-center gap-2 shadow-2xl">
@@ -989,10 +1241,10 @@ export default function App() {
           onClick={exportVideo}
           disabled={!audioFile || isExporting}
           className={`relative p-3 rounded-full transition-all group flex items-center gap-1.5 pr-4 pl-3 ${isExporting
-              ? 'bg-white/10 text-neutral-400 cursor-not-allowed'
-              : audioFile
-                ? 'hover:bg-white text-neutral-300 hover:text-black border border-white/20'
-                : 'text-neutral-600 cursor-not-allowed'
+            ? 'bg-white/10 text-neutral-400 cursor-not-allowed'
+            : audioFile
+              ? 'hover:bg-white text-neutral-300 hover:text-black border border-white/20'
+              : 'text-neutral-600 cursor-not-allowed'
             }`}
         >
           {isExporting ? (
@@ -1108,7 +1360,7 @@ export default function App() {
                   <Settings className="w-4 h-4 text-neutral-400" />
                   <span>Visualizer</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
                   <button onClick={() => setSettings(s => ({ ...s, type: 'bars' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'bars' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Bars</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'wave' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'wave' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Wave</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'spiral' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'spiral' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Spiral</button>
@@ -1116,10 +1368,12 @@ export default function App() {
                   <button onClick={() => setSettings(s => ({ ...s, type: 'ring' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'ring' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Ring</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'strings' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'strings' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Strings</button>
                   <button onClick={() => setSettings(s => ({ ...s, type: 'orbit' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'orbit' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Orbit</button>
-                  <button onClick={() => setSettings(s => ({ ...s, type: 'fireflies' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'fireflies' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Fireflies</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'spikes' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'spikes' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Spikes</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'laser' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'laser' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Laser</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'nebula' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'nebula' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Nebula</button>
                 </div>
 
-                <div className="flex items-center justify-between pt-2">
+                <div className="flex items-center justify-between pt-4 pb-2 border-b border-white/5">
                   <label className="text-sm font-medium text-neutral-300">Mirror Spectrum</label>
                   <button
                     onClick={() => setSettings(s => ({ ...s, mirror: !s.mirror }))}
@@ -1136,6 +1390,84 @@ export default function App() {
                     className={`w-12 h-7 rounded-full relative transition-colors ${settings.pulseEnabled ? 'bg-white' : 'bg-neutral-800'}`}
                   >
                     <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.pulseEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Glow</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Adds bloom light to visualizer</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, glowEnabled: !s.glowEnabled }))}
+                    className={`w-12 h-7 rounded-full relative transition-colors ${settings.glowEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.glowEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Trail</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Leaves fading ghost traces</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, trailEnabled: !s.trailEnabled }))}
+                    className={`w-12 h-7 rounded-full relative transition-colors ${settings.trailEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.trailEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 pb-2">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Color Cycle</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Auto-cycles hue over time</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, colorCycle: !s.colorCycle }))}
+                    className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${settings.colorCycle ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.colorCycle ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 pb-2">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Camera Shake</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Screen trembles on heavy bass drops</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, shakeEnabled: !s.shakeEnabled }))}
+                    className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${settings.shakeEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.shakeEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 pb-2">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300">Ghost Echo</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Draws expanding translucent layers</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, echoEnabled: !s.echoEnabled }))}
+                    className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${settings.echoEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.echoEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 pb-2">
+                  <div>
+                    <label className="text-sm font-medium text-neutral-300 text-rose-300">Invert Colors</label>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Flips canvas colors to negative mode</p>
+                  </div>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, invertColors: !s.invertColors }))}
+                    className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${settings.invertColors ? 'bg-rose-500' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.invertColors ? 'bg-white translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
                   </button>
                 </div>
               </div>
