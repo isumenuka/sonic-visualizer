@@ -40,6 +40,7 @@ export default function App() {
   // Cached Image objects for canvas drawing (avoids creating new Image every frame)
   const centerImgRef = useRef<HTMLImageElement | null>(null);
   const logoImgRef = useRef<HTMLImageElement | null>(null);
+  const bgImgRef = useRef<HTMLImageElement | null>(null);
 
   const [settings, setSettings] = useState<VisualizerSettings>({
     primaryColor: '#ffffff',
@@ -238,6 +239,14 @@ export default function App() {
     }
   };
 
+  // Preload bg image into a ref so the render loop can draw it on canvas during export
+  useEffect(() => {
+    if (!bgImage) { bgImgRef.current = null; return; }
+    const img = new Image();
+    img.src = bgImage;
+    img.onload = () => { bgImgRef.current = img; };
+  }, [bgImage]);
+
   const [cropSrc, setCropSrc] = useState<string | null>(null);
 
   // Used to physically shake the entire screen DOM
@@ -384,6 +393,26 @@ export default function App() {
         ctx.globalCompositeOperation = 'source-over';
       } else {
         ctx.clearRect(0, 0, virtualWidth, virtualHeight);
+      }
+
+      // During export: draw background image directly on canvas (CSS bg div is not captured by captureStream)
+      if (isExportingNow && bgImgRef.current) {
+        ctx.save();
+        const img = bgImgRef.current;
+        // Compute cover-fill scale, also add blur padding to prevent transparent halo at edges
+        const blurPad = s.bgBlur * 2;
+        const imgScale = Math.max(
+          (virtualWidth + blurPad * 2) / img.naturalWidth,
+          (virtualHeight + blurPad * 2) / img.naturalHeight
+        );
+        const sw = img.naturalWidth * imgScale;
+        const sh = img.naturalHeight * imgScale;
+        if (s.bgBlur > 0) ctx.filter = `blur(${s.bgBlur}px)`;
+        ctx.globalAlpha = s.bgOpacity;
+        ctx.drawImage(img, (virtualWidth - sw) / 2, (virtualHeight - sh) / 2, sw, sh);
+        ctx.filter = 'none';
+        ctx.globalAlpha = 1;
+        ctx.restore();
       }
 
       const centerX = virtualWidth / 2;
@@ -576,17 +605,19 @@ export default function App() {
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden font-sans text-white">
-      {/* Background Layer */}
-      <div
-        className="absolute inset-[-50px] z-0 bg-cover bg-center"
-        style={{
-          backgroundImage: bgImage ? `url(${bgImage})` : 'none',
-          filter: `blur(${settings.bgBlur}px)`,
-          opacity: settings.bgOpacity,
-          transform: `translate(${shakeOffset.x}px, ${shakeOffset.y}px)`,
-          willChange: 'transform' // Hardware acceleration for fast shaking
-        }}
-      />
+      {/* Background Layer — hidden during export since canvas draws it instead */}
+      {!isExporting && (
+        <div
+          className="absolute inset-[-50px] z-0 bg-cover bg-center"
+          style={{
+            backgroundImage: bgImage ? `url(${bgImage})` : 'none',
+            filter: `blur(${settings.bgBlur}px)`,
+            opacity: settings.bgOpacity,
+            transform: `translate(${shakeOffset.x}px, ${shakeOffset.y}px)`,
+            willChange: 'transform'
+          }}
+        />
+      )}
 
       {/* Canvas Layer */}
       <canvas
