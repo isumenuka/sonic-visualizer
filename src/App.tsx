@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Download } from 'lucide-react';
+import { Upload, Image as ImageIcon, Settings, Play, Pause, Type, Music, Download, X, User } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // Types
@@ -160,13 +160,15 @@ function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-white/10 rounded-2xl p-6 flex flex-col items-center gap-5 shadow-2xl w-[380px]">
-        <h2 className="text-white font-semibold text-lg">Adjust Profile Picture</h2>
-        <p className="text-gray-400 text-xs text-center">Drag to reposition · Zoom slider to resize</p>
+      <div className="bg-[#0f0f0f] border border-white/10 rounded-2xl p-6 flex flex-col items-center gap-6 shadow-2xl w-[380px]">
+        <div className="text-center space-y-1">
+          <h2 className="text-white font-semibold text-lg tracking-tight">Adjust Profile</h2>
+          <p className="text-neutral-400 text-xs">Drag to reposition · Zoom to resize</p>
+        </div>
 
         {/* Circle crop preview */}
         <div
-          className="relative overflow-hidden rounded-full border-2 border-cyan-400 cursor-grab active:cursor-grabbing select-none"
+          className="relative overflow-hidden rounded-full cursor-grab active:cursor-grabbing select-none shadow-inner bg-black"
           style={{ width: SIZE, height: SIZE }}
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
@@ -197,14 +199,14 @@ function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
             />
           )}
           {/* Circular guide ring */}
-          <div className="absolute inset-0 rounded-full ring-2 ring-cyan-400/40 pointer-events-none" />
+          <div className="absolute inset-0 rounded-full ring-2 ring-white/20 pointer-events-none shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]" />
         </div>
 
         {/* Zoom */}
-        <div className="w-full space-y-2">
-          <div className="flex justify-between text-xs text-gray-400">
+        <div className="w-full space-y-3">
+          <div className="flex justify-between text-xs font-medium text-neutral-400">
             <span>Zoom</span>
-            <span>{Math.round(zoom * 100)}%</span>
+            <span className="text-white">{Math.round(zoom * 100)}%</span>
           </div>
           <input
             type="range"
@@ -213,23 +215,23 @@ function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
             step={0.01}
             value={zoom}
             onChange={e => setZoom(Number(e.target.value))}
-            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+            className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
           />
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3 w-full">
+        <div className="flex gap-3 w-full pt-2">
           <button
             onClick={onCancel}
-            className="flex-1 py-2 rounded-xl border border-white/10 text-gray-400 text-sm hover:bg-white/5 transition-colors"
+            className="flex-1 py-2.5 rounded-xl border border-white/10 text-neutral-300 text-sm font-medium hover:bg-white/5 hover:text-white transition-all"
           >
             Cancel
           </button>
           <button
             onClick={handleConfirm}
-            className="flex-1 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-600 text-white text-sm font-semibold hover:opacity-90 transition-opacity"
+            className="flex-1 py-2.5 rounded-xl bg-white text-black text-sm font-semibold hover:bg-neutral-200 transition-colors shadow-lg"
           >
-            Apply ✓
+            Apply
           </button>
         </div>
       </div>
@@ -251,14 +253,14 @@ export default function App() {
   const logoImgRef = useRef<HTMLImageElement | null>(null);
 
   const [settings, setSettings] = useState<VisualizerSettings>({
-    primaryColor: '#00ffff',
-    secondaryColor: '#ff00ff',
+    primaryColor: '#ffffff',
+    secondaryColor: '#666666',
     sensitivity: 1.5,
     barWidth: 3,
     radius: 150,
     type: 'bars',
     centerMode: 'text',
-    centerText: 'AUDIO VISUALIZER',
+    centerText: 'AUDIO',
     centerTextSize: 24,
     centerColor: '#000000',
     logoScale: 0.5,
@@ -667,44 +669,94 @@ export default function App() {
         crossOrigin="anonymous"
       />
 
-      {/* UI Controls */}
+      {/* Floating Bottom Dock */}
+      <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 bg-[#0a0a0a]/80 backdrop-blur-3xl border border-white/10 rounded-full p-2.5 flex items-center gap-2 shadow-2xl">
+        {/* Play/Pause (Primary) */}
+        <button
+          onClick={togglePlay}
+          disabled={!audioFile}
+          className={`p-4 rounded-full flex items-center justify-center transition-all ${audioFile
+            ? 'bg-white text-black hover:bg-neutral-200 shadow-[0_0_20px_rgba(255,255,255,0.1)] active:scale-95'
+            : 'bg-white/5 text-neutral-600 cursor-not-allowed'
+            }`}
+        >
+          {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current" />}
+        </button>
+
+        <div className="w-px h-8 bg-white/10 mx-2" />
+
+        {/* Upload Audio */}
+        <label className="p-3 rounded-full hover:bg-white/10 text-neutral-300 hover:text-white cursor-pointer transition-colors relative group">
+          <Music className="w-5 h-5" />
+          <input type="file" accept="audio/*" onChange={handleAudioUpload} className="hidden" />
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+            {audioFile ? 'Change Audio' : 'Upload Audio'}
+          </div>
+        </label>
+
+        {/* Upload Background */}
+        <label className="p-3 rounded-full hover:bg-white/10 text-neutral-300 hover:text-white cursor-pointer transition-colors relative group">
+          <ImageIcon className="w-5 h-5" />
+          <input type="file" accept="image/*" onChange={handleBgUpload} className="hidden" />
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+            {bgFile ? 'Change Background' : 'Upload Background'}
+          </div>
+        </label>
+
+        {/* Upload Profile */}
+        <label className="p-3 rounded-full hover:bg-white/10 text-neutral-300 hover:text-white cursor-pointer transition-colors relative group">
+          <User className="w-5 h-5" />
+          <input type="file" accept="image/*" onChange={handleCenterImageUpload} className="hidden" />
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+            {centerImage ? 'Change Profile' : 'Upload Profile Picture'}
+          </div>
+        </label>
+
+        <div className="w-px h-8 bg-white/10 mx-2" />
+
+        {/* Settings Toggle */}
+        <button
+          onClick={() => setShowControls(!showControls)}
+          className={`p-3 rounded-full transition-colors relative group ${showControls ? 'bg-white text-black' : 'hover:bg-white/10 text-neutral-300 hover:text-white'}`}
+        >
+          <Settings className="w-5 h-5" />
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+            Settings
+          </div>
+        </button>
+      </div>
+
+      {/* Floating Settings Panel */}
       <AnimatePresence>
         {showControls && (
           <motion.div
-            initial={{ x: -300, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: -300, opacity: 0 }}
-            className="absolute left-0 top-0 bottom-0 z-20 w-80 bg-black/80 backdrop-blur-md border-r border-white/10 p-6 overflow-y-auto"
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="fixed right-8 bottom-32 max-h-[calc(100vh-160px)] z-30 w-[360px] bg-[#0a0a0a]/85 backdrop-blur-3xl border border-white/10 rounded-[32px] p-6 overflow-y-auto custom-scrollbar shadow-[0_0_40px_rgba(0,0,0,0.5)] flex flex-col"
           >
-            <h1 className="text-2xl font-bold mb-6 bg-gradient-to-r from-cyan-400 to-purple-500 bg-clip-text text-transparent">
-              Sonic Visualizer
-            </h1>
+            <div className="flex items-center justify-between mb-8 pb-4 border-b border-white/5 shrink-0">
+              <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+                Appearance
+              </h2>
+              <button onClick={() => setShowControls(false)} className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            {/* File Uploads */}
-            <div className="space-y-4 mb-8">
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Audio Source</label>
-                <label className="flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 cursor-pointer transition-colors border border-white/5 hover:border-white/20">
-                  <Music className="w-5 h-5 text-cyan-400" />
-                  <span className="text-sm truncate flex-1">{audioFile ? audioFile.name : 'Upload Audio'}</span>
-                  <input type="file" accept="audio/*" onChange={handleAudioUpload} className="hidden" />
-                </label>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Background Image</label>
-                <label className="flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 cursor-pointer transition-colors border border-white/5 hover:border-white/20">
-                  <ImageIcon className="w-5 h-5 text-green-400" />
-                  <span className="text-sm truncate flex-1">{bgFile ? bgFile.name : 'Upload Background'}</span>
-                  <input type="file" accept="image/*" onChange={handleBgUpload} className="hidden" />
-                </label>
-
-                {/* Blur & Opacity — shown once a background is uploaded */}
-                {bgImage && (
-                  <div className="space-y-3 pt-1">
-                    <div className="flex justify-between">
-                      <label className="text-xs text-gray-400">Blur</label>
-                      <span className="text-xs text-gray-500">{settings.bgBlur}px</span>
+            <div className="space-y-6">
+              {/* Background Adjustments - Only show if BG exists */}
+              {bgImage && (
+                <div className="space-y-4 pt-1 pb-4 border-b border-white/5 px-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white mb-2">
+                    <ImageIcon className="w-4 h-4 text-neutral-400" />
+                    <span>Background</span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs font-medium">
+                      <label className="text-neutral-400">Blur</label>
+                      <span className="text-white">{settings.bgBlur}px</span>
                     </div>
                     <input
                       type="range"
@@ -712,11 +764,13 @@ export default function App() {
                       max="50"
                       value={settings.bgBlur}
                       onChange={(e) => setSettings(s => ({ ...s, bgBlur: Number(e.target.value) }))}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-400"
+                      className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
                     />
-                    <div className="flex justify-between">
-                      <label className="text-xs text-gray-400">Opacity</label>
-                      <span className="text-xs text-gray-500">{Math.round(settings.bgOpacity * 100)}%</span>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs font-medium">
+                      <label className="text-neutral-400">Opacity</label>
+                      <span className="text-white">{Math.round(settings.bgOpacity * 100)}%</span>
                     </div>
                     <input
                       type="range"
@@ -725,200 +779,158 @@ export default function App() {
                       step="0.05"
                       value={settings.bgOpacity}
                       onChange={(e) => setSettings(s => ({ ...s, bgOpacity: Number(e.target.value) }))}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-400"
+                      className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
                     />
                   </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Center Profile (Fills Circle)</label>
-                <label className="flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 cursor-pointer transition-colors border border-white/5 hover:border-white/20">
-                  <ImageIcon className="w-5 h-5 text-pink-400" />
-                  <span className="text-sm truncate flex-1">{centerImage ? 'Profile Selected' : 'Upload Profile'}</span>
-                  <input type="file" accept="image/*" onChange={handleCenterImageUpload} className="hidden" />
-                </label>
-              </div>
-
-
-
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setSettings(s => ({ ...s, centerMode: 'text' }))}
-                  className={`flex-1 py-2 text-xs rounded-lg border ${settings.centerMode === 'text' ? 'bg-cyan-500/20 border-cyan-500 text-cyan-400' : 'bg-transparent border-white/10 text-gray-400'}`}
-                >
-                  Text
-                </button>
-                <button
-                  onClick={() => setSettings(s => ({ ...s, centerMode: 'profile' }))}
-                  className={`flex-1 py-2 text-xs rounded-lg border ${settings.centerMode === 'profile' ? 'bg-pink-500/20 border-pink-500 text-pink-400' : 'bg-transparent border-white/10 text-gray-400'}`}
-                >
-                  Profile
-                </button>
-
-              </div>
-            </div>
-
-            {/* Playback Controls */}
-            <div className="mb-8">
-              <button
-                onClick={togglePlay}
-                disabled={!audioFile}
-                className={`w-full py-4 rounded-xl flex items-center justify-center gap-2 font-bold text-lg transition-all ${audioFile
-                  ? 'bg-gradient-to-r from-cyan-500 to-purple-600 hover:scale-[1.02] shadow-lg shadow-purple-500/20'
-                  : 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                  }`}
-              >
-                {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current" />}
-                {isPlaying ? 'PAUSE' : 'PLAY'}
-              </button>
-            </div>
-
-            {/* Customization */}
-            <div className="space-y-6">
-              <div className="flex items-center gap-2 text-sm font-semibold text-white/90 pb-2 border-b border-white/10">
-                <Settings className="w-4 h-4" />
-                <span>Visualizer Settings</span>
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-xs text-gray-400">Style</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => setSettings(s => ({ ...s, type: 'bars' }))} className={`p-2 text-xs rounded-lg border ${settings.type === 'bars' ? 'bg-white text-black border-white' : 'bg-transparent border-white/20 text-gray-400'}`}>Bars</button>
-                  <button onClick={() => setSettings(s => ({ ...s, type: 'wave' }))} className={`p-2 text-xs rounded-lg border ${settings.type === 'wave' ? 'bg-white text-black border-white' : 'bg-transparent border-white/20 text-gray-400'}`}>Wave</button>
-                  <button onClick={() => setSettings(s => ({ ...s, type: 'spiral' }))} className={`p-2 text-xs rounded-lg border ${settings.type === 'spiral' ? 'bg-white text-black border-white' : 'bg-transparent border-white/20 text-gray-400'}`}>Spiral</button>
-                  <button onClick={() => setSettings(s => ({ ...s, type: 'particles' }))} className={`p-2 text-xs rounded-lg border ${settings.type === 'particles' ? 'bg-white text-black border-white' : 'bg-transparent border-white/20 text-gray-400'}`}>Particles</button>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <label className="text-xs text-gray-400">Mirror Spectrum</label>
-                  <button
-                    onClick={() => setSettings(s => ({ ...s, mirror: !s.mirror }))}
-                    className={`w-10 h-5 rounded-full relative transition-colors ${settings.mirror ? 'bg-cyan-500' : 'bg-gray-700'}`}
-                  >
-                    <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${settings.mirror ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <label className="text-xs text-gray-400">Beat Pulse</label>
-                  <button
-                    onClick={() => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled }))}
-                    className={`w-10 h-5 rounded-full relative transition-colors ${settings.pulseEnabled ? 'bg-pink-500' : 'bg-gray-700'}`}
-                  >
-                    <div className={`absolute top-1 left-1 w-3 h-3 bg-white rounded-full transition-transform ${settings.pulseEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <label className="text-xs text-gray-400">Rotation Speed</label>
-                  <span className="text-xs text-gray-500">{settings.rotationSpeed}</span>
-                </div>
-                <input
-                  type="range"
-                  min="-5"
-                  max="5"
-                  step="0.1"
-                  value={settings.rotationSpeed}
-                  onChange={(e) => setSettings(s => ({ ...s, rotationSpeed: Number(e.target.value) }))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-green-400"
-                />
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-xs text-gray-400">Colors</label>
-                <div className="flex gap-2">
-                  <div className="flex-1 space-y-1">
-                    <label className="text-[10px] text-gray-500">Primary</label>
-                    <input
-                      type="color"
-                      value={settings.primaryColor}
-                      onChange={(e) => setSettings(s => ({ ...s, primaryColor: e.target.value }))}
-                      className="h-8 w-full rounded cursor-pointer bg-transparent"
-                    />
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <label className="text-[10px] text-gray-500">Secondary</label>
-                    <input
-                      type="color"
-                      value={settings.secondaryColor}
-                      onChange={(e) => setSettings(s => ({ ...s, secondaryColor: e.target.value }))}
-                      className="h-8 w-full rounded cursor-pointer bg-transparent"
-                    />
-                  </div>
-                  <div className="flex-1 space-y-1">
-                    <label className="text-[10px] text-gray-500">Center BG</label>
-                    <input
-                      type="color"
-                      value={settings.centerColor}
-                      onChange={(e) => setSettings(s => ({ ...s, centerColor: e.target.value }))}
-                      className="h-8 w-full rounded cursor-pointer bg-transparent"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {settings.centerMode === 'logo' && (
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <label className="text-xs text-gray-400">Logo Scale</label>
-                    <span className="text-xs text-gray-500">{Math.round(settings.logoScale * 100)}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0.1"
-                    max="1.5"
-                    step="0.1"
-                    value={settings.logoScale}
-                    onChange={(e) => setSettings(s => ({ ...s, logoScale: Number(e.target.value) }))}
-                    className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-yellow-400"
-                  />
                 </div>
               )}
 
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <label className="text-xs text-gray-400">Radius</label>
-                  <span className="text-xs text-gray-500">{settings.radius}px</span>
+              {/* Center Element Adjustments */}
+              <div className="space-y-4 px-1 pb-4 border-b border-white/5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white mb-2">
+                  <User className="w-4 h-4 text-neutral-400" />
+                  <span>Center Element</span>
                 </div>
-                <input
-                  type="range"
-                  min="50"
-                  max="300"
-                  value={settings.radius}
-                  onChange={(e) => setSettings(s => ({ ...s, radius: Number(e.target.value) }))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                />
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex justify-between">
-                  <label className="text-xs text-gray-400">Sensitivity</label>
-                  <span className="text-xs text-gray-500">{settings.sensitivity}x</span>
+                <div className="flex gap-2 bg-neutral-900/50 p-1 rounded-2xl border border-white/5 shadow-inner">
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, centerMode: 'text' }))}
+                    className={`flex-1 py-2 text-sm rounded-xl font-medium transition-all ${settings.centerMode === 'text' ? 'bg-white text-black shadow-sm' : 'bg-transparent text-neutral-400 hover:text-white'}`}
+                  >
+                    Text
+                  </button>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, centerMode: 'profile' }))}
+                    className={`flex-1 py-2 text-sm rounded-xl font-medium transition-all ${settings.centerMode === 'profile' ? 'bg-white text-black shadow-sm' : 'bg-transparent text-neutral-400 hover:text-white'}`}
+                  >
+                    Profile
+                  </button>
                 </div>
-                <input
-                  type="range"
-                  min="0.5"
-                  max="3"
-                  step="0.1"
-                  value={settings.sensitivity}
-                  onChange={(e) => setSettings(s => ({ ...s, sensitivity: Number(e.target.value) }))}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-400"
-                />
-              </div>
-
-              <div className="space-y-3">
-                <label className="text-xs text-gray-400">Center Text</label>
-                <div className="flex gap-2">
+                {settings.centerMode === 'text' && (
                   <input
                     type="text"
                     value={settings.centerText}
                     onChange={(e) => setSettings(s => ({ ...s, centerText: e.target.value }))}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-cyan-500 transition-colors"
-                    placeholder="Enter text..."
+                    className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm font-medium text-white focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all shadow-inner placeholder:text-neutral-600 mt-2"
+                    placeholder="Enter center text..."
                   />
+                )}
+              </div>
+
+              {/* Visualizer Adjustments */}
+              <div className="space-y-4 px-1 pb-4 border-b border-white/5">
+                <div className="flex items-center gap-2 text-sm font-semibold text-white mb-2">
+                  <Settings className="w-4 h-4 text-neutral-400" />
+                  <span>Visualizer</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'bars' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'bars' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Bars</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'wave' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'wave' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Wave</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'spiral' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'spiral' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Spiral</button>
+                  <button onClick={() => setSettings(s => ({ ...s, type: 'particles' }))} className={`p-3 text-sm rounded-2xl font-medium transition-all border ${settings.type === 'particles' ? 'bg-white text-black border-transparent shadow-sm' : 'bg-transparent text-neutral-300 border-white/10 hover:bg-white/5 hover:border-white/20'}`}>Particles</button>
+                </div>
+
+                <div className="flex items-center justify-between pt-2">
+                  <label className="text-sm font-medium text-neutral-300">Mirror Spectrum</label>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, mirror: !s.mirror }))}
+                    className={`w-12 h-7 rounded-full relative transition-colors ${settings.mirror ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.mirror ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between pt-1 pb-2">
+                  <label className="text-sm font-medium text-neutral-300">Beat Pulse</label>
+                  <button
+                    onClick={() => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled }))}
+                    className={`w-12 h-7 rounded-full relative transition-colors ${settings.pulseEnabled ? 'bg-white' : 'bg-neutral-800'}`}
+                  >
+                    <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${settings.pulseEnabled ? 'bg-black translate-x-5' : 'bg-white translate-x-0 shadow-sm'}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Sliders */}
+              <div className="space-y-4 px-1 pb-4">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs font-medium">
+                    <label className="text-neutral-400">Rotation Speed</label>
+                    <span className="text-white">{settings.rotationSpeed}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="-5"
+                    max="5"
+                    step="0.1"
+                    value={settings.rotationSpeed}
+                    onChange={(e) => setSettings(s => ({ ...s, rotationSpeed: Number(e.target.value) }))}
+                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs font-medium">
+                    <label className="text-neutral-400">Visualize Radius</label>
+                    <span className="text-white">{settings.radius}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="50"
+                    max="300"
+                    value={settings.radius}
+                    onChange={(e) => setSettings(s => ({ ...s, radius: Number(e.target.value) }))}
+                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs font-medium">
+                    <label className="text-neutral-400">Audio Sensitivity</label>
+                    <span className="text-white">{settings.sensitivity}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="3"
+                    step="0.1"
+                    value={settings.sensitivity}
+                    onChange={(e) => setSettings(s => ({ ...s, sensitivity: Number(e.target.value) }))}
+                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
+                  />
+                </div>
+              </div>
+
+              {/* Color Palette */}
+              <div className="space-y-3 px-1 pt-2">
+                <label className="text-xs font-medium text-neutral-400">Color Palette</label>
+                <div className="flex gap-3">
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <input
+                      type="color"
+                      value={settings.primaryColor}
+                      onChange={(e) => setSettings(s => ({ ...s, primaryColor: e.target.value }))}
+                      className="h-10 w-full rounded-[10px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-md"
+                    />
+                    <label className="text-[10px] text-center text-neutral-400 font-medium">Primary</label>
+                  </div>
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <input
+                      type="color"
+                      value={settings.secondaryColor}
+                      onChange={(e) => setSettings(s => ({ ...s, secondaryColor: e.target.value }))}
+                      className="h-10 w-full rounded-[10px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-md"
+                    />
+                    <label className="text-[10px] text-center text-neutral-400 font-medium">Secondary</label>
+                  </div>
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <input
+                      type="color"
+                      value={settings.centerColor}
+                      onChange={(e) => setSettings(s => ({ ...s, centerColor: e.target.value }))}
+                      className="h-10 w-full rounded-[10px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-md"
+                    />
+                    <label className="text-[10px] text-center text-neutral-400 font-medium">Center</label>
+                  </div>
                 </div>
               </div>
 
@@ -926,14 +938,6 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Toggle Controls Button */}
-      <button
-        onClick={() => setShowControls(!showControls)}
-        className="absolute top-6 right-6 z-30 p-3 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/10 transition-all"
-      >
-        <Settings className={`w-6 h-6 text-white transition-transform ${showControls ? 'rotate-180' : ''}`} />
-      </button>
 
       {/* Empty State / Prompt */}
       {!audioFile && !isPlaying && (
