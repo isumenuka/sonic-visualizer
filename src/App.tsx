@@ -109,7 +109,8 @@ export default function App() {
     canvas.width = w;
     canvas.height = h;
 
-    const stream = canvas.captureStream(60);
+    // @ts-ignore - mozCaptureStream is not in standard types but exists in Firefox
+    const stream = canvas.captureStream ? canvas.captureStream(60) : (canvas as any).mozCaptureStream(60);
 
     // Mix audio into the recording stream and disconnect from speakers (mute)
     if (audioContextRef.current && analyserRef.current) {
@@ -136,8 +137,10 @@ export default function App() {
         const a = document.createElement('a');
         a.href = url;
         a.download = `sonic-visualizer-${recordingQuality}.webm`;
+        document.body.appendChild(a); // Required for Firefox to allow clicking
         a.click();
-        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000); // Delay prevents download cancellation
       }
 
       if (canvasRef.current) {
@@ -174,8 +177,17 @@ export default function App() {
 
     // Start from beginning and auto-stop when audio ends
     audio.currentTime = 0;
-    audio.onended = () => { mr.stop(); audio.onended = () => setIsPlaying(false); };
-    mr.start();
+
+    const handleExportAudioEnded = () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      setIsPlaying(false);
+      audio.removeEventListener('ended', handleExportAudioEnded);
+    };
+    audio.addEventListener('ended', handleExportAudioEnded);
+
+    mr.start(1000); // Emit data in 1-second chunks to reduce RAM usage overhead
     audio.play();
     setIsPlaying(true);
     mediaRecorderRef.current = mr;
