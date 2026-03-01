@@ -1,0 +1,5 @@
+{
+  "name": "Sonic Visualizer",
+  "description": "A customizable audio visualization tool. Upload audio, set background images, and generate stunning circular sound visualizations.",
+  "requestFramePermissions": []
+}
