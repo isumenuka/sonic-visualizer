@@ -247,6 +247,10 @@ export default function App() {
   const [logoImage, setLogoImage] = useState<string | null>(null);     // Used for Logo mode
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   // Cached Image objects for canvas drawing (avoids creating new Image every frame)
   const centerImgRef = useRef<HTMLImageElement | null>(null);
@@ -280,6 +284,58 @@ export default function App() {
   // Always-current settings ref so the animation loop never reads stale state
   const settingsRef = useRef<VisualizerSettings>(settings);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
+
+  const startRecording = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    recordedChunksRef.current = [];
+
+    const [w, h] = resolutionMap[recordingQuality];
+    // Temporarily stretch the canvas to the target resolution
+    canvas.width = w;
+    canvas.height = h;
+
+    const stream = canvas.captureStream(60);
+
+    // Mix audio into the recording stream
+    if (audioRef.current && audioContextRef.current) {
+      const dest = audioContextRef.current.createMediaStreamDestination();
+      if (analyserRef.current) analyserRef.current.connect(dest);
+      const audioTrack = dest.stream.getAudioTracks()[0];
+      if (audioTrack) stream.addTrack(audioTrack);
+    }
+
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+
+    const mr = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 40_000_000 });
+    mr.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+    mr.onstop = () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `sonic-visualizer-${recordingQuality}.webm`;
+      a.click();
+      URL.revokeObjectURL(url);
+      // Restore canvas to window size
+      if (canvasRef.current) {
+        canvasRef.current.width = window.innerWidth;
+        canvasRef.current.height = window.innerHeight;
+      }
+    };
+    mr.start();
+    mediaRecorderRef.current = mr;
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setIsRecording(false);
+  };
 
   // Initialize Audio Context
   useEffect(() => {
@@ -377,31 +433,33 @@ export default function App() {
       audioRef.current.pause();
     } else {
       audioRef.current.play();
-      draw();
     }
     setIsPlaying(!isPlaying);
   };
 
-  const draw = () => {
-    if (!canvasRef.current || !analyserRef.current) return;
-
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Resize canvas to full screen
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-
-    const bufferLength = analyserRef.current.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-
+  useEffect(() => {
     let rotation = 0;
-    let particles: { x: number, y: number, speed: number, angle: number, life: number, color: string }[] = [];
+    let particles: { x: number, y: number, speed: number, angle: number, life: number, color: string, wobbleOffset?: number }[] = [];
+    const dataArray = new Uint8Array(1024); // Safely sized array
 
     const renderFrame = () => {
       animationRef.current = requestAnimationFrame(renderFrame);
-      analyserRef.current!.getByteFrequencyData(dataArray);
+
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+
+      if (analyserRef.current) {
+        analyserRef.current.getByteFrequencyData(dataArray);
+      } else {
+        dataArray.fill(0);
+      }
 
       // Always read the latest settings from ref (avoids stale closure)
       const s = settingsRef.current;
@@ -428,34 +486,7 @@ export default function App() {
       ctx.rotate(rotation);
       ctx.translate(-centerX, -centerY);
 
-      // Draw Center Circle Background
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
-      ctx.fillStyle = s.centerColor;
-      ctx.fill();
-
-      // Draw Center Content
-      if (s.centerMode === 'profile' && centerImgRef.current) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
-        ctx.clip();
-        ctx.drawImage(centerImgRef.current, centerX - currentRadius, centerY - currentRadius, currentRadius * 2, currentRadius * 2);
-        ctx.restore();
-      } else if (s.centerMode === 'logo' && logoImgRef.current) {
-        // Draw logo centered, scaled, no clipping
-        const img = logoImgRef.current;
-        const size = (currentRadius * 2) * s.logoScale;
-        ctx.drawImage(img, centerX - size / 2, centerY - size / 2, size, size);
-      } else {
-        // Just Background (already drawn)
-      }
-
-      ctx.strokeStyle = s.primaryColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Draw Visualizer
+      // ── 1. Draw Visualizer FIRST (behind center circle) ─────────────────
       if (s.type === 'bars') {
         drawCircularBars(ctx, dataArray, centerX, centerY, currentRadius, s);
       } else if (s.type === 'wave') {
@@ -473,6 +504,33 @@ export default function App() {
       } else if (s.type === 'fireflies') {
         drawFireflies(ctx, dataArray, centerX, centerY, currentRadius, particles, s);
       }
+
+      // ── 2. Draw Center Circle ON TOP of the visualizer ──────────────────
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
+      ctx.fillStyle = s.centerColor;
+      ctx.fill();
+
+      // ── 3. Draw Center Content (profile / logo) ──────────────────────────
+      if (s.centerMode === 'profile' && centerImgRef.current) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
+        ctx.clip();
+        ctx.drawImage(centerImgRef.current, centerX - currentRadius, centerY - currentRadius, currentRadius * 2, currentRadius * 2);
+        ctx.restore();
+      } else if (s.centerMode === 'logo' && logoImgRef.current) {
+        const img = logoImgRef.current;
+        const size = (currentRadius * 2) * s.logoScale;
+        ctx.drawImage(img, centerX - size / 2, centerY - size / 2, size, size);
+      }
+
+      // Outline ring
+      ctx.strokeStyle = s.primaryColor;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
+      ctx.stroke();
 
       ctx.restore(); // Restore rotation context
 
@@ -500,7 +558,7 @@ export default function App() {
     };
 
     renderFrame();
-  };
+  }, []);
 
   const drawCircularBars = (ctx: CanvasRenderingContext2D, data: Uint8Array, cx: number, cy: number, radius: number, s: VisualizerSettings) => {
     const bars = 180;
@@ -893,6 +951,33 @@ export default function App() {
             Settings
           </div>
         </button>
+
+        <div className="w-px h-8 bg-white/10 mx-2" />
+
+        {/* Resolution Selector */}
+        <div className="flex items-center gap-1 bg-white/5 rounded-full px-1 py-1 border border-white/10">
+          {(['1080p', '2k', '4k'] as const).map(q => (
+            <button
+              key={q}
+              onClick={() => setRecordingQuality(q)}
+              disabled={isRecording}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider transition-all ${recordingQuality === q ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+
+        {/* Record / Stop Button */}
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          className={`relative p-3 rounded-full transition-all group ${isRecording ? 'bg-red-500 text-white animate-pulse' : 'hover:bg-white/10 text-neutral-300 hover:text-red-400'}`}
+        >
+          <div className={`w-4 h-4 rounded-full transition-all ${isRecording ? 'bg-white scale-75' : 'bg-red-500'}`} />
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+            {isRecording ? 'Stop & Save' : `Record ${recordingQuality.toUpperCase()}`}
+          </div>
+        </button>
       </div>
 
       {/* Floating Settings Panel */}
@@ -1094,15 +1179,6 @@ export default function App() {
                       className="h-10 w-full rounded-[10px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-md"
                     />
                     <label className="text-[10px] text-center text-neutral-400 font-medium">Secondary</label>
-                  </div>
-                  <div className="flex-1 flex flex-col gap-1.5">
-                    <input
-                      type="color"
-                      value={settings.centerColor}
-                      onChange={(e) => setSettings(s => ({ ...s, centerColor: e.target.value }))}
-                      className="h-10 w-full rounded-[10px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-md"
-                    />
-                    <label className="text-[10px] text-center text-neutral-400 font-medium">Center</label>
                   </div>
                 </div>
               </div>
