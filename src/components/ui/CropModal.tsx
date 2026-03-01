@@ -7,7 +7,8 @@ export interface CropModalProps {
 }
 
 export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
-    const SIZE = 300; // diameter of crop circle in px
+    // Crop circle size: responsive — smaller on narrow screens
+    const [SIZE, setSIZE] = useState(260);
     const [zoom, setZoom] = useState(1);
     const [offset, setOffset] = useState({ x: 0, y: 0 });
     const [dragging, setDragging] = useState(false);
@@ -15,18 +16,31 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
     const imgRef = useRef<HTMLImageElement | null>(null);
     const [imgLoaded, setImgLoaded] = useState(false);
 
+    // Pick a reasonable crop circle diameter based on screen width
+    useEffect(() => {
+        const update = () => {
+            const vw = window.innerWidth;
+            // fold/flip: 320px → 200px crop circle; normal mobile: 260; desktop: 300
+            if (vw < 360) setSIZE(180);
+            else if (vw < 480) setSIZE(220);
+            else setSIZE(280);
+        };
+        update();
+        window.addEventListener('resize', update);
+        return () => window.removeEventListener('resize', update);
+    }, []);
+
     useEffect(() => {
         const img = new Image();
         img.src = src;
         img.onload = () => {
             imgRef.current = img;
             setImgLoaded(true);
-            // default zoom: fit the shorter side to the circle
             const minSide = Math.min(img.naturalWidth, img.naturalHeight);
             setZoom(SIZE / minSide);
             setOffset({ x: 0, y: 0 });
         };
-    }, [src]);
+    }, [src, SIZE]);
 
     const onMouseDown = (e: React.MouseEvent) => {
         e.preventDefault();
@@ -63,12 +77,10 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
         canvas.width = SIZE;
         canvas.height = SIZE;
         const ctx = canvas.getContext('2d')!;
-        // clip to circle
         ctx.beginPath();
         ctx.arc(SIZE / 2, SIZE / 2, SIZE / 2, 0, Math.PI * 2);
         ctx.clip();
         const img = imgRef.current;
-        // Match the CSS transform: translate to center + offset, then scale, draw at natural size
         ctx.translate(SIZE / 2 + offset.x, SIZE / 2 + offset.y);
         ctx.scale(zoom, zoom);
         ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2);
@@ -76,11 +88,23 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <div className="bg-[#0f0f0f] border border-white/10 rounded-2xl p-6 flex flex-col items-center gap-6 shadow-2xl w-[380px]">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/80 backdrop-blur-sm p-0 sm:p-4">
+            <div className="
+                bg-[#0f0f0f] border border-white/10 shadow-2xl
+                flex flex-col items-center gap-4 sm:gap-6
+                /* Mobile: full-width bottom sheet style */
+                w-full rounded-t-3xl rounded-b-none pt-6 pb-8 px-5
+                /* Tablet+: card */
+                sm:w-auto sm:rounded-2xl sm:p-6
+                /* Max width on big screens so it doesn't get too wide */
+                sm:max-w-sm md:max-w-[380px]
+            ">
+                {/* Drag handle (mobile only) */}
+                <div className="absolute top-2.5 left-1/2 -translate-x-1/2 w-10 h-1 bg-white/20 rounded-full sm:hidden" />
+
                 <div className="text-center space-y-1">
-                    <h2 className="text-white font-semibold text-lg tracking-tight">Adjust Profile</h2>
-                    <p className="text-neutral-400 text-xs">Drag to reposition · Zoom to resize</p>
+                    <h2 className="text-white font-semibold text-base sm:text-lg tracking-tight">Adjust Profile</h2>
+                    <p className="text-neutral-400 text-[10px] sm:text-xs">Drag to reposition · Zoom to resize</p>
                 </div>
 
                 {/* Circle crop preview */}
@@ -102,7 +126,6 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
                             draggable={false}
                             style={{
                                 position: 'absolute',
-                                // Keep natural size — zoom via CSS transform only (no stretching)
                                 width: 'auto',
                                 height: 'auto',
                                 maxWidth: 'none',
@@ -120,8 +143,8 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
                 </div>
 
                 {/* Zoom */}
-                <div className="w-full space-y-3">
-                    <div className="flex justify-between text-xs font-medium text-neutral-400">
+                <div className="w-full space-y-2 sm:space-y-3 max-w-[320px]">
+                    <div className="flex justify-between text-[10px] sm:text-xs font-medium text-neutral-400">
                         <span>Zoom</span>
                         <span className="text-white">{Math.round(zoom * 100)}%</span>
                     </div>
@@ -137,16 +160,16 @@ export function CropModal({ src, onConfirm, onCancel }: CropModalProps) {
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-3 w-full pt-2">
+                <div className="flex gap-3 w-full pt-1 sm:pt-2 max-w-[320px]">
                     <button
                         onClick={onCancel}
-                        className="flex-1 py-2.5 rounded-xl border border-white/10 text-neutral-300 text-sm font-medium hover:bg-white/5 hover:text-white transition-all"
+                        className="flex-1 py-2.5 rounded-xl border border-white/10 text-neutral-300 text-xs sm:text-sm font-medium hover:bg-white/5 hover:text-white transition-all"
                     >
                         Cancel
                     </button>
                     <button
                         onClick={handleConfirm}
-                        className="flex-1 py-2.5 rounded-xl bg-white text-black text-sm font-semibold hover:bg-neutral-200 transition-colors shadow-lg"
+                        className="flex-1 py-2.5 rounded-xl bg-white text-black text-xs sm:text-sm font-semibold hover:bg-neutral-200 transition-colors shadow-lg"
                     >
                         Apply
                     </button>

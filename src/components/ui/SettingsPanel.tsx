@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Image as ImageIcon, User, Settings, RotateCcw, Palette, Wand2, Sliders } from 'lucide-react';
+import { X, Image as ImageIcon, Settings, RotateCcw, Palette, Wand2, Sliders, User } from 'lucide-react';
 import { VisualizerSettings } from '../../types';
 
 export interface SettingsPanelProps {
@@ -13,33 +13,25 @@ export interface SettingsPanelProps {
 
 type TabType = 'visuals' | 'center' | 'effects' | 'tuning';
 
-export function SettingsPanel({
-    showControls,
-    onClose,
-    bgImage,
-    settings,
-    setSettings
-}: SettingsPanelProps) {
+export function SettingsPanel({ showControls, onClose, bgImage, settings, setSettings }: SettingsPanelProps) {
     const [activeTab, setActiveTab] = useState<TabType>('visuals');
 
     const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
-        { id: 'visuals', label: 'Visuals', icon: <Palette className="w-4 h-4 mb-1" /> },
-        { id: 'center', label: 'Center', icon: <User className="w-4 h-4 mb-1" /> },
-        { id: 'effects', label: 'Effects', icon: <Wand2 className="w-4 h-4 mb-1" /> },
-        { id: 'tuning', label: 'Tuning', icon: <Sliders className="w-4 h-4 mb-1" /> },
+        { id: 'visuals', label: 'Visuals', icon: <Palette className="w-3.5 h-3.5 mb-0.5" /> },
+        { id: 'center', label: 'Center', icon: <User className="w-3.5 h-3.5 mb-0.5" /> },
+        { id: 'effects', label: 'Effects', icon: <Wand2 className="w-3.5 h-3.5 mb-0.5" /> },
+        { id: 'tuning', label: 'Tuning', icon: <Sliders className="w-3.5 h-3.5 mb-0.5" /> },
     ];
 
-    const renderToggle = (label: string, description: string, value: boolean, onChange: () => void, isDanger?: boolean) => (
-        <div className="flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
-            <div>
-                <label className={`text-sm font-medium ${isDanger ? 'text-rose-400' : 'text-neutral-200'}`}>{label}</label>
-                <p className="text-[10px] text-neutral-500 mt-0.5">{description}</p>
+    const renderToggle = (label: string, desc: string, value: boolean, onChange: () => void, isDanger?: boolean) => (
+        <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
+            <div className="flex-1 min-w-0 pr-2">
+                <div className={`text-xs font-medium ${isDanger ? 'text-rose-400' : 'text-neutral-200'}`}>{label}</div>
+                <div className="text-[9px] text-neutral-500 mt-0.5 leading-tight">{desc}</div>
             </div>
-            <button
-                onClick={onChange}
-                className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${value ? (isDanger ? 'bg-rose-500' : 'bg-white') : 'bg-neutral-800'}`}
-            >
-                <div className={`absolute top-1 left-1 w-5 h-5 rounded-full transition-transform ${value ? (isDanger ? 'bg-white translate-x-5' : 'bg-black translate-x-5') : 'bg-white translate-x-0 shadow-sm'}`} />
+            <button onClick={onChange}
+                className={`shrink-0 w-9 h-5 rounded-full relative transition-colors ${value ? (isDanger ? 'bg-rose-500' : 'bg-white') : 'bg-neutral-700'}`}>
+                <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform ${value ? (isDanger ? 'bg-white translate-x-4' : 'bg-black translate-x-4') : 'bg-neutral-400 translate-x-0'}`} />
             </button>
         </div>
     );
@@ -47,257 +39,173 @@ export function SettingsPanel({
     return (
         <AnimatePresence>
             {showControls && (
+                /* This component is embedded as a right sidebar in App.tsx.
+                   It fills 100% of the column container — no fixed positioning. */
                 <motion.div
-                    initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    className="fixed right-8 bottom-32 h-[550px] max-h-[calc(100vh-160px)] z-30 w-[380px] bg-[#0a0a0a]/90 backdrop-blur-3xl border border-white/10 rounded-[32px] p-6 shadow-[0_0_40px_rgba(0,0,0,0.5)] flex flex-col"
+                    key="settings-sidebar"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                    className="h-full flex flex-col bg-[#0a0a0a] overflow-hidden"
                 >
-                    <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/10 shrink-0">
-                        <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                            <Settings className="w-5 h-5 text-neutral-400" />
+                    {/* Header */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
+                        <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                            <Settings className="w-4 h-4 text-neutral-400" />
                             Appearance
                         </h2>
-                        <button onClick={onClose} className="p-2 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors">
-                            <X className="w-5 h-5" />
+                        <button onClick={onClose}
+                            className="p-1.5 rounded-full hover:bg-white/10 text-neutral-400 hover:text-white transition-colors">
+                            <X className="w-4 h-4" />
                         </button>
                     </div>
 
-                    <div className="flex bg-neutral-900/80 p-1 rounded-2xl border border-white/5 shadow-inner mb-6 shrink-0">
+                    {/* Tabs */}
+                    <div className="flex bg-neutral-900/80 mx-3 mt-3 p-0.5 rounded-xl border border-white/5 shrink-0">
                         {tabs.map(tab => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id)}
-                                className={`flex-1 py-3 text-[11px] rounded-xl font-medium transition-all flex flex-col items-center justify-center ${activeTab === tab.id ? 'bg-white text-black shadow-sm' : 'bg-transparent text-neutral-500 hover:text-neutral-300'}`}
-                            >
+                            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                                className={`flex-1 py-1.5 text-[9px] rounded-lg font-medium transition-all flex flex-col items-center justify-center ${activeTab === tab.id ? 'bg-white text-black shadow-sm' : 'text-neutral-500 hover:text-neutral-300'}`}>
                                 {tab.icon}
                                 {tab.label}
                             </button>
                         ))}
                     </div>
 
-                    <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 pb-2">
+                    {/* Scrollable content */}
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
                         <AnimatePresence mode="wait">
-                            <motion.div
-                                key={activeTab}
-                                initial={{ opacity: 0, x: 10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: -10 }}
-                                transition={{ duration: 0.15 }}
-                                className="space-y-6"
-                            >
+                            <motion.div key={activeTab}
+                                initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.12 }}
+                                className="space-y-4">
 
-                                {/* VISUALS TAB */}
+                                {/* ── VISUALS ── */}
                                 {activeTab === 'visuals' && (
-                                    <div className="space-y-6">
-                                        <div className="space-y-3">
-                                            <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Style</label>
-                                            <div className="grid grid-cols-3 gap-2">
-                                                {['bars', 'wave', 'spiral', 'particles', 'ring', 'strings', 'orbit', 'spikes', 'laser', 'nebula', 'aura', 'peaks'].map((type) => (
-                                                    <button
-                                                        key={type}
+                                    <div className="space-y-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Style</label>
+                                            <div className="grid grid-cols-3 gap-1">
+                                                {['bars', 'wave', 'spiral', 'particles', 'ring', 'strings', 'orbit', 'spikes', 'laser', 'nebula', 'aura', 'peaks'].map(type => (
+                                                    <button key={type}
                                                         onClick={() => setSettings(s => ({ ...s, type: type as any }))}
-                                                        className={`p-3 text-sm rounded-2xl font-medium transition-all border capitalize ${settings.type === type ? 'bg-white text-black border-transparent shadow-sm' : 'bg-white/5 text-neutral-300 border-white/5 hover:bg-white/10 hover:border-white/20'}`}
-                                                    >
+                                                        className={`py-2 text-[10px] rounded-lg font-medium transition-all border capitalize ${settings.type === type ? 'bg-white text-black border-transparent' : 'bg-white/5 text-neutral-300 border-white/5 hover:bg-white/10'}`}>
                                                         {type}
                                                     </button>
                                                 ))}
                                             </div>
                                         </div>
-
-                                        <div className="space-y-3">
-                                            <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Color Palette</label>
-                                            <div className="flex gap-3">
-                                                <div className="flex-1 flex flex-col gap-2">
-                                                    <input
-                                                        type="color"
-                                                        value={settings.primaryColor}
-                                                        onChange={(e) => setSettings(s => ({ ...s, primaryColor: e.target.value }))}
-                                                        className="h-12 w-full rounded-[14px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-[10px]"
-                                                    />
-                                                    <label className="text-xs text-center text-neutral-400 font-medium">Primary</label>
+                                        <div className="space-y-2">
+                                            <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Color Palette</label>
+                                            <div className="flex gap-2">
+                                                <div className="flex-1 space-y-1">
+                                                    <input type="color" value={settings.primaryColor}
+                                                        onChange={e => setSettings(s => ({ ...s, primaryColor: e.target.value }))}
+                                                        className="h-9 w-full rounded-xl cursor-pointer bg-transparent border border-white/10 p-0.5 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-lg" />
+                                                    <div className="text-[9px] text-center text-neutral-400">Primary</div>
                                                 </div>
-                                                <div className="flex-1 flex flex-col gap-2">
-                                                    <input
-                                                        type="color"
-                                                        value={settings.secondaryColor}
-                                                        onChange={(e) => setSettings(s => ({ ...s, secondaryColor: e.target.value }))}
-                                                        className="h-12 w-full rounded-[14px] cursor-pointer bg-transparent border border-white/10 p-1 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-[10px]"
-                                                    />
-                                                    <label className="text-xs text-center text-neutral-400 font-medium">Secondary</label>
+                                                <div className="flex-1 space-y-1">
+                                                    <input type="color" value={settings.secondaryColor}
+                                                        onChange={e => setSettings(s => ({ ...s, secondaryColor: e.target.value }))}
+                                                        className="h-9 w-full rounded-xl cursor-pointer bg-transparent border border-white/10 p-0.5 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:border-none [&::-webkit-color-swatch]:rounded-lg" />
+                                                    <div className="text-[9px] text-center text-neutral-400">Secondary</div>
                                                 </div>
                                             </div>
                                         </div>
                                     </div>
                                 )}
 
-                                {/* CENTER TAB */}
+                                {/* ── CENTER ── */}
                                 {activeTab === 'center' && (
-                                    <div className="space-y-6">
-                                        <div className="space-y-3">
-                                            <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Center Mode</label>
-                                            <div className="flex gap-2 bg-neutral-900/50 p-1 rounded-2xl border border-white/5 shadow-inner">
-                                                <button
-                                                    onClick={() => setSettings(s => ({ ...s, centerMode: 'text' }))}
-                                                    className={`flex-1 py-3 text-sm rounded-xl font-medium transition-all ${settings.centerMode === 'text' ? 'bg-white text-black shadow-sm' : 'bg-transparent text-neutral-400 hover:text-white'}`}
-                                                >
-                                                    Text
-                                                </button>
-                                                <button
-                                                    onClick={() => setSettings(s => ({ ...s, centerMode: 'profile' }))}
-                                                    className={`flex-1 py-3 text-sm rounded-xl font-medium transition-all ${settings.centerMode === 'profile' ? 'bg-white text-black shadow-sm' : 'bg-transparent text-neutral-400 hover:text-white'}`}
-                                                >
-                                                    Profile
-                                                </button>
+                                    <div className="space-y-4">
+                                        <div className="space-y-2">
+                                            <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Center Mode</label>
+                                            <div className="flex gap-1 bg-neutral-900/60 p-0.5 rounded-xl border border-white/5">
+                                                {['text', 'profile'].map(m => (
+                                                    <button key={m} onClick={() => setSettings(s => ({ ...s, centerMode: m as any }))}
+                                                        className={`flex-1 py-2 text-xs rounded-lg font-medium transition-all capitalize ${settings.centerMode === m ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}>
+                                                        {m}
+                                                    </button>
+                                                ))}
                                             </div>
                                         </div>
-
                                         {settings.centerMode === 'text' && (
-                                            <div className="space-y-3">
-                                                <label className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Content</label>
-                                                <input
-                                                    type="text"
-                                                    value={settings.centerText}
-                                                    onChange={(e) => setSettings(s => ({ ...s, centerText: e.target.value }))}
-                                                    className="w-full bg-black/40 border border-white/10 rounded-2xl px-4 py-4 text-sm font-medium text-white focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all shadow-inner placeholder:text-neutral-600"
-                                                    placeholder="Enter center text..."
-                                                />
+                                            <div className="space-y-1.5">
+                                                <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Text</label>
+                                                <input type="text" value={settings.centerText}
+                                                    onChange={e => setSettings(s => ({ ...s, centerText: e.target.value }))}
+                                                    className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-white transition-all placeholder:text-neutral-600"
+                                                    placeholder="Enter center text..." />
                                             </div>
                                         )}
                                     </div>
                                 )}
 
-                                {/* EFFECTS TAB */}
+                                {/* ── EFFECTS ── */}
                                 {activeTab === 'effects' && (
-                                    <div className="space-y-2">
+                                    <div className="space-y-1.5">
                                         {renderToggle("Particles Overlay", "Floating background dust", settings.bgParticlesEnabled, () => setSettings(s => ({ ...s, bgParticlesEnabled: !s.bgParticlesEnabled })))}
-                                        {renderToggle("Mirror Spectrum", "Reflects the frequency graph horizontally", settings.mirror, () => setSettings(s => ({ ...s, mirror: !s.mirror })))}
-                                        {renderToggle("Beat Pulse", "Scale reacts to sub-bass peaks", settings.pulseEnabled, () => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled })))}
-                                        {renderToggle("Glow", "Adds bloom light to visualizer", settings.glowEnabled, () => setSettings(s => ({ ...s, glowEnabled: !s.glowEnabled })))}
-                                        {renderToggle("Trail", "Leaves fading ghost traces", settings.trailEnabled, () => setSettings(s => ({ ...s, trailEnabled: !s.trailEnabled })))}
+                                        {renderToggle("Mirror Spectrum", "Reflects frequency horizontally", settings.mirror, () => setSettings(s => ({ ...s, mirror: !s.mirror })))}
+                                        {renderToggle("Beat Pulse", "Scale reacts to bass", settings.pulseEnabled, () => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled })))}
+                                        {renderToggle("Glow", "Bloom light on visualizer", settings.glowEnabled, () => setSettings(s => ({ ...s, glowEnabled: !s.glowEnabled })))}
+                                        {renderToggle("Trail", "Fading ghost traces", settings.trailEnabled, () => setSettings(s => ({ ...s, trailEnabled: !s.trailEnabled })))}
                                         {renderToggle("Color Cycle", "Auto-cycles hue over time", settings.colorCycle, () => setSettings(s => ({ ...s, colorCycle: !s.colorCycle })))}
-                                        {renderToggle("Camera Shake", "Screen trembles on heavy bass drops", settings.shakeEnabled, () => setSettings(s => ({ ...s, shakeEnabled: !s.shakeEnabled })))}
-                                        {renderToggle("Ghost Echo", "Draws expanding translucent layers", settings.echoEnabled, () => setSettings(s => ({ ...s, echoEnabled: !s.echoEnabled })))}
-                                        {renderToggle("Invert Colors", "Flips canvas colors to negative mode", settings.invertColors, () => setSettings(s => ({ ...s, invertColors: !s.invertColors })), true)}
+                                        {renderToggle("Camera Shake", "Screen trembles on heavy bass", settings.shakeEnabled, () => setSettings(s => ({ ...s, shakeEnabled: !s.shakeEnabled })))}
+                                        {renderToggle("Ghost Echo", "Expanding translucent layers", settings.echoEnabled, () => setSettings(s => ({ ...s, echoEnabled: !s.echoEnabled })))}
+                                        {renderToggle("Invert Colors", "Negative mode", settings.invertColors, () => setSettings(s => ({ ...s, invertColors: !s.invertColors })), true)}
                                     </div>
                                 )}
 
-                                {/* TUNING TAB */}
+                                {/* ── TUNING ── */}
                                 {activeTab === 'tuning' && (
-                                    <div className="space-y-8">
+                                    <div className="space-y-5">
                                         {bgImage && (
-                                            <div className="space-y-6">
-                                                <h3 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider flex items-center gap-2">
-                                                    <ImageIcon className="w-3.5 h-3.5" /> Background
-                                                </h3>
-                                                <div className="space-y-2">
-                                                    <div className="flex justify-between items-center text-xs font-medium">
-                                                        <label className="text-neutral-300">Blur</label>
-                                                        <span className="text-white bg-white/10 px-2 py-0.5 rounded-md">{settings.bgBlur}px</span>
-                                                    </div>
-                                                    <input
-                                                        type="range"
-                                                        min="0"
-                                                        max="50"
-                                                        value={settings.bgBlur}
-                                                        onChange={(e) => setSettings(s => ({ ...s, bgBlur: Number(e.target.value) }))}
-                                                        className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
-                                                    />
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-1.5 text-[9px] font-semibold text-neutral-400 uppercase tracking-wider">
+                                                    <ImageIcon className="w-3 h-3" /> Background
                                                 </div>
-                                                <div className="space-y-2">
-                                                    <div className="flex justify-between items-center text-xs font-medium">
-                                                        <label className="text-neutral-300">Opacity</label>
-                                                        <span className="text-white bg-white/10 px-2 py-0.5 rounded-md">{Math.round(settings.bgOpacity * 100)}%</span>
+                                                {[
+                                                    { label: 'Blur', key: 'bgBlur', min: 0, max: 50, step: 1, unit: 'px' },
+                                                    { label: 'Opacity', key: 'bgOpacity', min: 0, max: 1, step: 0.05, unit: '%', display: (v: number) => Math.round(v * 100) + '%' },
+                                                ].map(({ label, key, min, max, step, unit, display }) => (
+                                                    <div key={key} className="space-y-1">
+                                                        <div className="flex justify-between text-[9px] font-medium">
+                                                            <span className="text-neutral-300">{label}</span>
+                                                            <span className="text-white bg-white/10 px-1.5 py-0.5 rounded">
+                                                                {display ? display((settings as any)[key]) : `${(settings as any)[key]}${unit}`}
+                                                            </span>
+                                                        </div>
+                                                        <input type="range" min={min} max={max} step={step} value={(settings as any)[key]}
+                                                            onChange={e => setSettings(s => ({ ...s, [key]: Number(e.target.value) }))}
+                                                            className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white" />
                                                     </div>
-                                                    <input
-                                                        type="range"
-                                                        min="0"
-                                                        max="1"
-                                                        step="0.05"
-                                                        value={settings.bgOpacity}
-                                                        onChange={(e) => setSettings(s => ({ ...s, bgOpacity: Number(e.target.value) }))}
-                                                        className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
-                                                    />
-                                                </div>
+                                                ))}
                                             </div>
                                         )}
 
-                                        <div className="space-y-6">
-                                            <h3 className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">Engine</h3>
-                                            <div className="space-y-2">
-                                                <div className="flex justify-between items-center text-xs font-medium">
-                                                    <label className="text-neutral-300">Rotation Speed</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-white bg-white/10 px-2 py-0.5 rounded-md">{settings.rotationSpeed}</span>
-                                                        <button
-                                                            onClick={() => setSettings(s => ({ ...s, rotationSpeed: 0 }))}
-                                                            className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
-                                                            title="Reset to default (0)"
-                                                        >
-                                                            <RotateCcw className="w-3 h-3" />
-                                                        </button>
+                                        <div className="space-y-3">
+                                            <div className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider">Engine</div>
+                                            {[
+                                                { label: 'Rotation Speed', key: 'rotationSpeed', min: -5, max: 5, step: 0.1, def: 0, unit: '' },
+                                                { label: 'Radius', key: 'radius', min: 50, max: 300, step: 1, def: 150, unit: 'px' },
+                                                { label: 'Sensitivity', key: 'sensitivity', min: 0.5, max: 3, step: 0.1, def: 1.5, unit: 'x' },
+                                            ].map(({ label, key, min, max, step, def, unit }) => (
+                                                <div key={key} className="space-y-1">
+                                                    <div className="flex justify-between items-center text-[9px] font-medium">
+                                                        <span className="text-neutral-300">{label}</span>
+                                                        <div className="flex items-center gap-1">
+                                                            <span className="text-white bg-white/10 px-1.5 py-0.5 rounded">{(settings as any)[key]}{unit}</span>
+                                                            <button onClick={() => setSettings(s => ({ ...s, [key]: def }))}
+                                                                className="text-neutral-600 hover:text-white p-0.5 rounded hover:bg-white/10 transition-colors">
+                                                                <RotateCcw className="w-2.5 h-2.5" />
+                                                            </button>
+                                                        </div>
                                                     </div>
+                                                    <input type="range" min={min} max={max} step={step} value={(settings as any)[key]}
+                                                        onChange={e => setSettings(s => ({ ...s, [key]: Number(e.target.value) }))}
+                                                        className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white" />
                                                 </div>
-                                                <input
-                                                    type="range"
-                                                    min="-5"
-                                                    max="5"
-                                                    step="0.1"
-                                                    value={settings.rotationSpeed}
-                                                    onChange={(e) => setSettings(s => ({ ...s, rotationSpeed: Number(e.target.value) }))}
-                                                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
-                                                />
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <div className="flex justify-between items-center text-xs font-medium">
-                                                    <label className="text-neutral-300">Visualize Radius</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-white bg-white/10 px-2 py-0.5 rounded-md">{settings.radius}px</span>
-                                                        <button
-                                                            onClick={() => setSettings(s => ({ ...s, radius: 150 }))}
-                                                            className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
-                                                            title="Reset to default (150)"
-                                                        >
-                                                            <RotateCcw className="w-3 h-3" />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <input
-                                                    type="range"
-                                                    min="50"
-                                                    max="300"
-                                                    value={settings.radius}
-                                                    onChange={(e) => setSettings(s => ({ ...s, radius: Number(e.target.value) }))}
-                                                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
-                                                />
-                                            </div>
-
-                                            <div className="space-y-2">
-                                                <div className="flex justify-between items-center text-xs font-medium">
-                                                    <label className="text-neutral-300">Audio Sensitivity</label>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-white bg-white/10 px-2 py-0.5 rounded-md">{settings.sensitivity}x</span>
-                                                        <button
-                                                            onClick={() => setSettings(s => ({ ...s, sensitivity: 1.5 }))}
-                                                            className="text-neutral-500 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10"
-                                                            title="Reset to default (1.5x)"
-                                                        >
-                                                            <RotateCcw className="w-3 h-3" />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                <input
-                                                    type="range"
-                                                    min="0.5"
-                                                    max="3"
-                                                    step="0.1"
-                                                    value={settings.sensitivity}
-                                                    onChange={(e) => setSettings(s => ({ ...s, sensitivity: Number(e.target.value) }))}
-                                                    className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white"
-                                                />
-                                            </div>
+                                            ))}
                                         </div>
                                     </div>
                                 )}
