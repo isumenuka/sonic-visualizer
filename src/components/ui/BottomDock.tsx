@@ -9,6 +9,7 @@ export interface BottomDockProps {
     isPlaying: boolean;
     showControls: boolean;
     isExporting: boolean;
+    isLiveRecording: boolean;
     recordingQuality: '1080p' | '2k' | '4k';
     exportEngine: ExportEngine;
     togglePlay: () => void;
@@ -19,12 +20,13 @@ export interface BottomDockProps {
     onQualityChange: (quality: '1080p' | '2k' | '4k') => void;
     onEngineChange: (engine: ExportEngine) => void;
     onExport: () => void;
+    onLiveRecord: () => void;
 }
 
 export function BottomDock({
-    audioFile, bgFile, centerImage, isPlaying, showControls, isExporting,
+    audioFile, bgFile, centerImage, isPlaying, showControls, isExporting, isLiveRecording,
     recordingQuality, exportEngine, togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
-    onToggleSettings, onQualityChange, onEngineChange, onExport
+    onToggleSettings, onQualityChange, onEngineChange, onExport, onLiveRecord
 }: BottomDockProps) {
     const webCodecsAvailable = typeof VideoEncoder !== 'undefined';
 
@@ -45,8 +47,8 @@ export function BottomDock({
                 {/* ── Play / Pause ── */}
                 <button
                     onClick={togglePlay}
-                    disabled={!audioFile}
-                    className={`p-2.5 sm:p-3 rounded-full flex items-center justify-center transition-all shrink-0 ${audioFile
+                    disabled={!audioFile || isLiveRecording}
+                    className={`p-2.5 sm:p-3 rounded-full flex items-center justify-center transition-all shrink-0 ${audioFile && !isLiveRecording
                         ? 'bg-white text-black hover:bg-neutral-200 active:scale-95'
                         : 'bg-white/5 text-neutral-600 cursor-not-allowed'}`}
                 >
@@ -94,6 +96,42 @@ export function BottomDock({
 
                 <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
 
+                {/* ── 🔴 Live Record Button ── */}
+                <button
+                    onClick={onLiveRecord}
+                    disabled={!audioFile || isExporting}
+                    title={isLiveRecording ? 'Stop recording & download' : 'Live Record — records canvas + audio in real-time'}
+                    className={`p-2 sm:p-2.5 rounded-full transition-all relative group shrink-0 ${isLiveRecording
+                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                            : !audioFile || isExporting
+                                ? 'text-neutral-600 cursor-not-allowed'
+                                : 'text-neutral-300 hover:bg-red-500/10 hover:text-red-400'
+                        }`}
+                >
+                    {/* Record icon — pulsing dot when recording */}
+                    <svg className="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24" fill="none">
+                        <circle
+                            cx="12" cy="12" r="8"
+                            stroke="currentColor" strokeWidth="2"
+                        />
+                        <circle
+                            cx="12" cy="12" r="4"
+                            fill="currentColor"
+                            className={isLiveRecording ? 'animate-pulse' : ''}
+                        />
+                    </svg>
+                    {/* Live indicator badge */}
+                    {isLiveRecording && (
+                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                    )}
+                    {/* Tooltip */}
+                    <span className="absolute -top-9 left-1/2 -translate-x-1/2 hidden sm:block bg-black/80 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none z-50">
+                        {isLiveRecording ? '⏹ Stop & Download' : '⏺ Live Record'}
+                    </span>
+                </button>
+
+                <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
+
                 {/* ── Export Engine Toggle (GPU → CPU → Cloud) ── */}
                 <button
                     onClick={() => {
@@ -101,13 +139,13 @@ export function BottomDock({
                         else if (exportEngine === 'ffmpeg') onEngineChange('server');
                         else onEngineChange('webcodecs');
                     }}
-                    disabled={isExporting}
+                    disabled={isExporting || isLiveRecording}
                     title={
                         exportEngine === 'webcodecs' ? 'GPU (WebCodecs) — click to switch to FFmpeg CPU'
                             : exportEngine === 'ffmpeg' ? 'CPU (FFmpeg) — click to switch to Cloud render'
-                                : '☁ Cloud (Render.com server) — click to switch back to GPU'
+                                : '☁ Cloud (Google Cloud Run) — click to switch back to GPU'
                     }
-                    className={`p-2 sm:p-2.5 rounded-full transition-colors relative group shrink-0 ${isExporting ? 'cursor-not-allowed opacity-50' :
+                    className={`p-2 sm:p-2.5 rounded-full transition-colors relative group shrink-0 ${isExporting || isLiveRecording ? 'cursor-not-allowed opacity-50' :
                         exportEngine === 'webcodecs'
                             ? 'text-emerald-400 hover:bg-emerald-400/10'
                             : exportEngine === 'ffmpeg'
@@ -140,7 +178,7 @@ export function BottomDock({
                         <button
                             key={q}
                             onClick={() => onQualityChange(q)}
-                            disabled={isExporting}
+                            disabled={isExporting || isLiveRecording}
                             className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-bold uppercase tracking-wider transition-all ${recordingQuality === q ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
                         >
                             {q}
@@ -151,8 +189,8 @@ export function BottomDock({
                 {/* ── Export ── */}
                 <button
                     onClick={onExport}
-                    disabled={!audioFile || isExporting}
-                    className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-[10px] sm:text-[11px] font-semibold tracking-wide transition-all shrink-0 ${isExporting
+                    disabled={!audioFile || isExporting || isLiveRecording}
+                    className={`flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-4 py-1.5 sm:py-2 rounded-full text-[10px] sm:text-[11px] font-semibold tracking-wide transition-all shrink-0 ${isExporting || isLiveRecording
                         ? 'bg-white/10 text-neutral-400 cursor-not-allowed'
                         : audioFile
                             ? 'hover:bg-white text-neutral-300 hover:text-black border border-white/20'

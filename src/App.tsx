@@ -1,12 +1,12 @@
 /**
  * Sonic Visualizer
- * Tech: C/C++ → WebAssembly (FFmpeg), TypeScript, HTML/CSS
- *
- * Deployment: GitHub → Vercel (frontend) + Render.com (FFmpeg WASM server)
+ * Tech: TypeScript, React, Canvas API, WebCodecs, FFmpeg WASM
  *
  * Export engines:
- *   - WebCodecs (primary): GPU-accelerated, fast, outputs MP4/WebM natively
- *   - FFmpeg WASM (fallback): CPU-based, universally compatible, uses Render.com CDN
+ *   - WebCodecs (primary): GPU-accelerated, fast
+ *   - FFmpeg WASM (fallback): CPU-based, universally compatible
+ *   - Cloud (Google Cloud Run): server-side rendering for long videos
+ *   - Live Record: real-time MediaRecorder capture
  */
 
 import React, { useRef, useEffect, useState } from 'react';
@@ -22,6 +22,7 @@ import {
 import { exportWithFFmpeg } from './utils/ffmpegExportEngine';
 import { exportWithWebCodecs } from './utils/exportEngine';
 import { exportWithServer } from './utils/serverExportEngine';
+import { LiveRecorder, downloadRecording } from './utils/liveRecorder';
 
 import { CropModal } from './components/ui/CropModal';
 import { BottomDock } from './components/ui/BottomDock';
@@ -64,7 +65,11 @@ export default function App() {
 
   const exportAbortRef = useRef<AbortController | null>(null);
   const isExportingRef = useRef(false);
-  const wasPlayingRef = useRef(false);  // remember playback state so we can resume after export
+  const wasPlayingRef = useRef(false);
+
+  // ── Live Record ──────────────────────────────────────────────────────────
+  const [isLiveRecording, setIsLiveRecording] = useState(false);
+  const liveRecorderRef = useRef<LiveRecorder | null>(null);
 
   // ── Visualizer settings ──────────────────────────────────────────────────
   const [settings, setSettings] = useState<VisualizerSettings>({
@@ -215,7 +220,55 @@ export default function App() {
     setIsExporting(false);
     isExportingRef.current = false;
     setExportError(null);
-    // resumeApp() is called inside the catch block above when abort fires
+  };
+
+  // ── Live Record ─────────────────────────────────────────────────────
+  const startLiveRecord = () => {
+    if (!audioFile || !canvasRef.current || !audioRef.current || !audioContextRef.current) return;
+    if (isExporting || isLiveRecording) return;
+
+    // Seek to beginning and play
+    audioRef.current.currentTime = 0;
+    audioRef.current.play().catch(console.error);
+    setIsPlaying(true);
+
+    // Resume AudioContext if suspended
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
+
+    const rec = new LiveRecorder({
+      canvas: canvasRef.current,
+      audioElement: audioRef.current,
+      audioContext: audioContextRef.current,
+      fps: 30,
+      onStop: (blob) => {
+        // Use song filename as base for the downloaded file
+        const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
+        downloadRecording(blob, baseName);
+        setIsLiveRecording(false);
+      },
+    });
+    rec.start();
+    liveRecorderRef.current = rec;
+    setIsLiveRecording(true);
+
+    // Auto-stop when song finishes
+    const handleEnded = () => {
+      rec.stop();
+      setIsPlaying(false);
+      audioRef.current!.removeEventListener('ended', handleEnded);
+    };
+    audioRef.current.addEventListener('ended', handleEnded);
+  };
+
+  const stopLiveRecord = () => {
+    liveRecorderRef.current?.stop();
+    // isLiveRecording is set to false inside onStop callback
+    if (audioRef.current) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
   };
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
@@ -591,6 +644,7 @@ export default function App() {
           isPlaying={isPlaying}
           showControls={showControls}
           isExporting={isExporting}
+          isLiveRecording={isLiveRecording}
           recordingQuality={recordingQuality}
           exportEngine={exportEngine}
           togglePlay={togglePlay}
@@ -601,6 +655,7 @@ export default function App() {
           onQualityChange={setRecordingQuality}
           onEngineChange={setExportEngine}
           onExport={exportVideo}
+          onLiveRecord={isLiveRecording ? stopLiveRecord : startLiveRecord}
         />
       </div>
 
