@@ -2,6 +2,7 @@
     "name": "sonic-ffmpeg-server",
     "version": "1.0.0",
     "description": "Static file server for FFmpeg WASM core files with required security headers",
+    "type": "module",
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
