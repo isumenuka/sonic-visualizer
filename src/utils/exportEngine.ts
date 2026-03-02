@@ -1,3 +1,4 @@
+/// <reference lib="dom" />
 /**
  * GPU-Accelerated WebCodecs Export Engine — v4
  *
@@ -274,12 +275,14 @@ function renderExportFrame(
 
 export async function exportWithWebCodecs(options: ExportOptions): Promise<void> {
     const { audioFile, width, height, settings, bgImg, centerImg, logoImg, onProgress, signal } = options;
-    const FPS = 60;
+    // 30 fps: half the frame count of 60fps, imperceptible quality difference for
+    // music visualizers. Cuts export time in half (e.g. 30 min → ~27k frames vs ~54k).
+    const FPS = 30;
     const FFT_SIZE = 2048;
-    const GOP = FPS * 2;
-    // Scale pipeline depth down for high resolutions to reduce peak memory pressure
+    const GOP = FPS * 2;  // keyframe every 2 seconds
+    // Larger pipeline = encoder stays busy without stalling on backpressure
     const px = width * height;
-    const PIPELINE_DEPTH = px >= 3840 * 2160 ? 3 : px >= 2560 * 1440 ? 6 : 12;
+    const PIPELINE_DEPTH = px >= 3840 * 2160 ? 6 : px >= 2560 * 1440 ? 12 : 24;
 
     // ── 1. Decode audio ───────────────────────────────────────────────────────
     const arrayBuffer = await audioFile.arrayBuffer();
@@ -360,10 +363,10 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         codec: videoCodecStr,
         width, height,
         bitrate: getVideoBitrate(width, height),
-        bitrateMode: 'constant',
+        bitrateMode: 'variable',       // VBR: faster than CBR, encoder skips bitrate analysis
         framerate: FPS,
         hardwareAcceleration: videoHW,
-        latencyMode: 'quality',
+        latencyMode: 'realtime',       // prioritise throughput over quality (still high-bitrate)
     };
 
     // ── 5. Set up muxer ───────────────────────────────────────────────────────
@@ -499,16 +502,13 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     }
 
     // ── 8. Canvas ─────────────────────────────────────────────────────────────
+    // No willReadFrequently: we no longer call getImageData(). VideoFrame is
+    // created directly from the canvas element, which avoids the GPU→CPU readback
+    // entirely and is dramatically faster.
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true, desynchronized: false })!;
-
-    // Pre-allocate a reusable RGBA pixel buffer to avoid per-frame browser
-    // allocation failures ("Array buffer allocation failed") at 2K/4K.
-    const rgbaByteLength = width * height * 4;
-    const pixelBuffer = new ArrayBuffer(rgbaByteLength);
-    const pixelView = new Uint8ClampedArray(pixelBuffer);
+    const ctx = canvas.getContext('2d')!;
 
     const state: RenderState = {
         rotation: 0,
@@ -535,15 +535,11 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
 
         renderExportFrame(ctx, width, height, dataArray, settings, state, bgImg, centerImg, logoImg);
 
-        // Copy pixels into pre-allocated buffer so VideoFrame never allocates its own
-        const imageData = ctx.getImageData(0, 0, width, height);
-        pixelView.set(imageData.data);
-
+        // Create VideoFrame DIRECTLY from the canvas — no getImageData() / pixel
+        // copy needed. The browser hands the GPU texture straight to the encoder,
+        // avoiding the expensive GPU→CPU→GPU readback that made export slow.
         const tsUs = Math.round((fi / FPS) * 1_000_000);
-        const frame = new VideoFrame(pixelBuffer, {
-            format: 'RGBA',
-            codedWidth: width,
-            codedHeight: height,
+        const frame = new VideoFrame(canvas as any, {
             timestamp: tsUs,
             duration: Math.round(1_000_000 / FPS),
         });
