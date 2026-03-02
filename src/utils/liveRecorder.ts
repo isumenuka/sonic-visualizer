@@ -43,6 +43,11 @@ export class LiveRecorder {
     /** Returns the best supported MIME type for recording */
     static getMimeType(): string {
         const candidates = [
+            // MP4 first — H.264+AAC, natively plays everywhere
+            'video/mp4;codecs=avc1,mp4a.40.2',  // Chrome Windows, Safari
+            'video/mp4;codecs=avc1',
+            'video/mp4',
+            // WebM fallback (Firefox, older Chrome on Linux/Mac)
             'video/webm;codecs=vp9,opus',
             'video/webm;codecs=vp8,opus',
             'video/webm',
@@ -84,8 +89,13 @@ export class LiveRecorder {
         const mimeType = LiveRecorder.getMimeType();
         const recorderOptions: MediaRecorderOptions = {};
         if (mimeType) recorderOptions.mimeType = mimeType;
-        // Use a reasonable bitrate — 8 Mbps video + 256 kbps audio
-        recorderOptions.videoBitsPerSecond = 8_000_000;
+        // Auto-scale bitrate to canvas resolution
+        // ~0.14 bits/pixel/frame → 1080p@30fps ≈ 8 Mbps, 2K ≈ 15 Mbps, 4K ≈ 35 Mbps
+        const pixels = this.canvas.width * this.canvas.height;
+        recorderOptions.videoBitsPerSecond = Math.min(
+            Math.round(pixels * this.fps * 0.14),
+            40_000_000 // 40 Mbps cap for 4K
+        );
 
         this.recorder = new MediaRecorder(this.stream, recorderOptions);
 

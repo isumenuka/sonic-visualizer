@@ -70,6 +70,7 @@ export default function App() {
   // ── Live Record ──────────────────────────────────────────────────────────
   const [isLiveRecording, setIsLiveRecording] = useState(false);
   const liveRecorderRef = useRef<LiveRecorder | null>(null);
+  const isLiveRecordingRef = useRef(false); // mirrors state, accessible in rAF loop
 
   // ── Visualizer settings ──────────────────────────────────────────────────
   const [settings, setSettings] = useState<VisualizerSettings>({
@@ -227,6 +228,24 @@ export default function App() {
     if (!audioFile || !canvasRef.current || !audioRef.current || !audioContextRef.current) return;
     if (isExporting || isLiveRecording) return;
 
+    // ── Set canvas to full recording resolution ───────────────────────────
+    let [recW, recH] = resolutionMap[recordingQuality]; // e.g. [1920, 1080]
+    if (aspectRatio === '9:16') [recW, recH] = [recH, recW];
+    const canvas = canvasRef.current;
+    // Save preview-box CSS sizes for restoration after recording
+    const prevCssW = canvas.style.width;
+    const prevCssH = canvas.style.height;
+    canvas.width = recW;
+    canvas.height = recH;
+    // Keep CSS display size matching the preview box (visually same, but rendering at full res)
+    const box = previewBoxRef.current;
+    if (box) {
+      canvas.style.width = box.clientWidth + 'px';
+      canvas.style.height = box.clientHeight + 'px';
+    }
+    // Block render loop from auto-resizing canvas back to preview size
+    isLiveRecordingRef.current = true;
+
     // Seek to beginning and play
     audioRef.current.currentTime = 0;
     audioRef.current.play().catch(console.error);
@@ -238,14 +257,20 @@ export default function App() {
     }
 
     const rec = new LiveRecorder({
-      canvas: canvasRef.current,
+      canvas,
       audioElement: audioRef.current,
       audioContext: audioContextRef.current,
       fps: 30,
       onStop: (blob) => {
-        // Use song filename as base for the downloaded file
+        // Restore canvas to preview-box size so preview looks normal again
+        isLiveRecordingRef.current = false;
+        if (canvasRef.current) {
+          canvasRef.current.style.width = prevCssW;
+          canvasRef.current.style.height = prevCssH;
+          // The render loop will auto-resize canvas.width/height on next frame
+        }
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
-        downloadRecording(blob, baseName);
+        downloadRecording(blob, `${baseName}-${recordingQuality}`);
         setIsLiveRecording(false);
       },
     });
@@ -264,7 +289,7 @@ export default function App() {
 
   const stopLiveRecord = () => {
     liveRecorderRef.current?.stop();
-    // isLiveRecording is set to false inside onStop callback
+    isLiveRecordingRef.current = false;
     if (audioRef.current) {
       audioRef.current.pause();
       setIsPlaying(false);
@@ -370,7 +395,9 @@ export default function App() {
       if (!ctx) return;
       const scale = (s.performanceMode && !isExportingNow) ? 0.5 : 1;
 
-      if (!isExportingNow) {
+      const isLiveRecordingNow = isLiveRecordingRef.current;
+
+      if (!isExportingNow && !isLiveRecordingNow) {
         const box = previewBoxRef.current;
         const boxW = box ? box.clientWidth : window.innerWidth;
         const boxH = box ? box.clientHeight : window.innerHeight;
@@ -392,11 +419,11 @@ export default function App() {
       if (s.colorCycle) colorCycleHue = (colorCycleHue + 0.5) % 360;
 
       const box = previewBoxRef.current;
-      const virtualWidth = isExportingNow ? canvas.width : (box ? box.clientWidth : window.innerWidth);
-      const virtualHeight = isExportingNow ? canvas.height : (box ? box.clientHeight : window.innerHeight);
+      const virtualWidth = (isExportingNow || isLiveRecordingNow) ? canvas.width : (box ? box.clientWidth : window.innerWidth);
+      const virtualHeight = (isExportingNow || isLiveRecordingNow) ? canvas.height : (box ? box.clientHeight : window.innerHeight);
 
       ctx.save();
-      if (!isExportingNow) ctx.scale(scale, scale);
+      if (!isExportingNow && !isLiveRecordingNow) ctx.scale(scale, scale);
 
       if (s.trailEnabled) {
         ctx.globalCompositeOperation = 'destination-out';
