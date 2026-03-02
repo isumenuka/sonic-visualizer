@@ -169,17 +169,18 @@ app.post('/render', upload.single('audio'), async (req, res) => {
 
         // ── Spawn FFmpeg to encode frames piped via stdin ──────────────────────
         const ffmpegArgs = [
-            // Video input: raw RGBA frames from stdin
+            // Video input: raw BGRA frames from stdin
+            // node-canvas toBuffer('raw') gives Cairo's native BGRA (on Linux x86 little-endian)
             '-f', 'rawvideo',
-            '-pix_fmt', 'rgba',
+            '-pix_fmt', 'bgra',
             '-s', `${W}x${H}`,
             '-r', String(FPS),
             '-i', 'pipe:0',
             // Audio input
             '-i', audioPath,
-            // Video encode: H.264 fast preset
+            // Video encode: H.264 ultrafast (3-5× faster than fast, same perceptual quality at CRF 18)
             '-c:v', 'libx264',
-            '-preset', 'fast',
+            '-preset', 'ultrafast',
             '-crf', '18',
             '-pix_fmt', 'yuv420p',
             '-threads', '0',        // use all CPU cores
@@ -208,9 +209,10 @@ app.post('/render', upload.single('audio'), async (req, res) => {
 
             renderFrame(ctx, W, H, dataArray, s, state);
 
-            // Get raw RGBA pixel data from canvas
-            const imgData = ctx.getImageData(0, 0, W, H);
-            const ok = ffmpegProc.stdin.write(Buffer.from(imgData.data.buffer));
+            // canvas.toBuffer('raw') returns the native Cairo pixel buffer (BGRA on Linux)
+            // directly — no JS ImageData object allocation, no copy. Much faster than getImageData.
+            const rawBuf = canvas.toBuffer('raw');
+            const ok = ffmpegProc.stdin.write(rawBuf);
 
             // Backpressure: if stdin buffer full, wait for drain
             if (!ok) {
