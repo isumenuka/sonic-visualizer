@@ -102,4 +102,21 @@ app.listen(PORT, () => {
     } else {
         console.log('[FFmpeg Server] ✓  ffmpeg-core.js and ffmpeg-core.wasm ready');
     }
+
+    // ── Self-ping keep-alive (prevents Render free tier from sleeping) ──────────
+    // Render automatically sets RENDER_EXTERNAL_URL to the public service URL.
+    const renderUrl = process.env.RENDER_EXTERNAL_URL;
+    if (renderUrl) {
+        const PING_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+        const pingHealth = () => {
+            fetch(`${renderUrl}/health`)
+                .then(r => r.json())
+                .then(data => console.log(`[Keep-Alive] ping OK — status: ${data.status}`))
+                .catch(err => console.warn(`[Keep-Alive] ping failed: ${err.message}`));
+        };
+        setInterval(pingHealth, PING_INTERVAL_MS);
+        console.log(`[Keep-Alive] Self-ping enabled every 10 min → ${renderUrl}/health`);
+    } else {
+        console.log('[Keep-Alive] RENDER_EXTERNAL_URL not set — skipping self-ping (local dev mode)');
+    }
 });
