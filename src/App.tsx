@@ -13,7 +13,7 @@ import {
   drawRing, drawStrings, drawOrbit, drawSpikes, drawLaser,
   drawNebula, drawAura, drawPeaks
 } from './visualizers/drawings';
-import { exportWithWebCodecs } from './utils/exportEngine';
+import { exportWithFFmpeg } from './utils/ffmpegExportEngine';
 
 import { CropModal } from './components/ui/CropModal';
 import { BottomDock } from './components/ui/BottomDock';
@@ -93,7 +93,7 @@ export default function App() {
     let [w, h] = resolutionMap[recordingQuality];
     if (aspectRatio === '9:16') [w, h] = [h, w];
     try {
-      await exportWithWebCodecs({
+      await exportWithFFmpeg({
         audioFile, width: w, height: h, quality: recordingQuality,
         settings: settingsRef.current,
         bgImg: bgImgRef.current, centerImg: centerImgRef.current, logoImg: logoImgRef.current,
@@ -407,8 +407,8 @@ export default function App() {
               key={r}
               onClick={() => setAspectRatio(r)}
               className={`px-2.5 py-1 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${aspectRatio === r
-                  ? 'bg-white text-black shadow-sm'
-                  : 'text-neutral-400 hover:text-white'
+                ? 'bg-white text-black shadow-sm'
+                : 'text-neutral-400 hover:text-white'
                 }`}
             >
               {r}
