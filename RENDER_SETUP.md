@@ -1,182 +1,103 @@
-# Render.com Setup Guide — Sonic Visualizer FFmpeg Server
+# Render.com Setup Guide — Sonic Visualizer Server v2
 
-This guide walks you through deploying the `render-server/` as a Web Service on Render.com so that FFmpeg WASM files (`ffmpeg-core.js` and `ffmpeg-core.wasm`) are served with all the required security headers.
-
----
-
-## Why Render.com?
-
-FFmpeg WASM requires **SharedArrayBuffer**, which browsers only allow when:
-
-| Header | Required Value |
-|--------|---------------|
-| `Cross-Origin-Opener-Policy` | `same-origin` |
-| `Cross-Origin-Embedder-Policy` | `require-corp` |
-| `Cross-Origin-Resource-Policy` | `cross-origin` |
-| `Access-Control-Allow-Origin` | `*` |
-
-Vercel sets the first two for the frontend, but the WASM files must be fetched from an origin that also sets `CORP: cross-origin` and CORS headers. The `render-server/` Express app does exactly this.
+This server does two things:
+1. **Serves FFmpeg WASM files** with security headers (SharedArrayBuffer support)
+2. **POST `/render` API** — server-side video rendering with native FFmpeg (no browser memory limits)
 
 ---
 
-## Step 1 — Copy & Commit FFmpeg Files
+## What Changed in v2
 
-Run this from the project root (only needed once, or after upgrading `@ffmpeg/core`):
+The server now has a **`POST /render`** endpoint:
+- Accepts your audio file + visualizer settings
+- Renders frames using `node-canvas` on the server
+- Encodes with **native FFmpeg** (multi-threaded, 5-10× faster than browser WASM)
+- Streams back a finished MP4
 
+**In the app**: click the engine icon (⚡/🖥) twice to reach **☁ Cloud** mode (sky-blue icon).
+
+---
+
+## Important: Update Build Command on Render.com
+
+Go to your Render.com service → **Settings → Build & Deploy** and update:
+
+| Field | Old Value | New Value |
+|-------|-----------|-----------|
+| **Build Command** | `cd render-server && npm install` | `cd render-server && npm install` *(same)* |
+| **Start Command** | `cd render-server && node server.js` | `cd render-server && node server.js` *(same)* |
+| **Instance Type** | Free | **Starter ($7/mo) recommended** for video rendering |
+
+> [!IMPORTANT]
+> The **Free tier** has 0.1 CPU and 512 MB RAM. Video rendering is CPU-intensive.
+> Upgrade to **Starter** ($7/mo, 0.5 CPU) for usable render speeds.
+> **Standard** ($25/mo, 1 CPU) is best for 1080p.
+
+---
+
+## Deploy Steps
+
+### 1. Push to GitHub
 ```bash
-npm install
-npm run copy-ffmpeg
-```
-
-This copies `ffmpeg-core.js` and `ffmpeg-core.wasm` into `render-server/public/`.
-
-**Commit these files to git** so Render can access them during deployment:
-
-```bash
-git add render-server/public/ffmpeg-core.js render-server/public/ffmpeg-core.wasm
-git commit -m "chore: add ffmpeg core wasm files for render server"
+git add render-server/
+git add src/utils/serverExportEngine.ts
+git add src/components/ui/BottomDock.tsx
+git add src/App.tsx
+git commit -m "feat: add server-side render API + Cloud export engine"
 git push
 ```
 
-> ⚠️ The `.wasm` file is ~30 MB. Make sure it's **not** in your `.gitignore`.
+Render.com auto-deploys on push. Vercel auto-deploys too.
 
 ---
 
-## Step 2 — Create a Render.com Account
-
-1. Go to [https://render.com](https://render.com)
-2. Sign up with GitHub (recommended — lets Render auto-deploy on push)
-
----
-
-## Step 3 — Create a New Web Service
-
-1. Click **New +** in the top-right corner
-2. Select **Web Service**
-3. Choose **Build and deploy from a Git repository**
-4. Click **Connect GitHub** and authorize Render
-5. Select your `sonic-visualizer` repository
-
----
-
-## Step 4 — Configure the Service
-
-Fill in the settings exactly as shown:
-
-| Field | Value |
-|-------|-------|
-| **Name** | `sonic-ffmpeg` *(or any name you like)* |
-| **Region** | Choose the closest to your users |
-| **Branch** | `main` |
-| **Root Directory** | *(leave blank)* |
-| **Runtime** | `Node` |
-| **Build Command** | `cd render-server && npm install` |
-| **Start Command** | `cd render-server && node server.js` |
-| **Instance Type** | `Free` *(works fine for this)* |
-
-Click **Create Web Service**.
-
----
-
-## Step 5 — Wait for First Deploy
-
-Render will:
-1. Clone your repo
-2. Run `cd render-server && npm install`
-3. Start the server with `node server.js`
-
-This takes ~2–3 minutes on first deploy.
-
----
-
-## Step 6 — Verify It's Working
-
-Once deployed, Render gives you a URL like:
-```
-https://sonic-ffmpeg.onrender.com
-```
-
-Test it:
+### 2. Verify the New Endpoint
 
 ```bash
-# Health check — should return JSON with file status
-curl https://sonic-ffmpeg.onrender.com/health
-
-# Expected response:
-# {"status":"ok","files":{"ffmpeg-core.js":true,"ffmpeg-core.wasm":true}}
-```
-
-Also test file access:
-```bash
-curl -I https://sonic-ffmpeg.onrender.com/ffmpeg-core.js
-# Should include:
-# Cross-Origin-Resource-Policy: cross-origin
-# Access-Control-Allow-Origin: *
+# Health check — should now show renderApi: true
+curl https://YOUR-RENDER-URL/health
+# Expected: {"status":"ok","files":{...},"renderApi":true}
 ```
 
 ---
 
-## Step 7 — Add the URL to Vercel
+### 3. Test a Render
 
-Copy your Render service URL and set it as an environment variable in Vercel:
+```bash
+curl -X POST https://YOUR-RENDER-URL/render \
+  -F "audio=@test.mp3" \
+  -F 'settings={"type":"bars","primaryColor":"#00ff88","secondaryColor":"#00aaff","radius":150,"sensitivity":1.5,"barWidth":3,"rotationSpeed":0,"glowEnabled":true,"trailEnabled":false,"pulseEnabled":false,"colorCycle":false,"echoEnabled":false,"invertColors":false,"shakeEnabled":false,"bgParticlesEnabled":false,"centerMode":"text","centerText":"TEST","centerTextSize":20,"centerColor":"#000000","logoScale":0.5,"bgBlur":10,"bgOpacity":0.5,"mirror":true}' \
+  -F "quality=1080p" \
+  --output test-output.mp4
+```
 
-1. Go to your Vercel project → **Settings → Environment Variables**
-2. Add:
-
-| Name | Value |
-|------|-------|
-| `VITE_FFMPEG_BASE_URL` | `https://sonic-ffmpeg.onrender.com` |
-
-3. Click **Save**, then redeploy your Vercel project.
+Should produce a valid MP4 file in ~1-2 minutes for a 3-minute song.
 
 ---
 
-## Auto-Deploy on Push
+## Using the Cloud Engine in the App
 
-By default, Render auto-deploys whenever you push to `main`. If you upgrade `@ffmpeg/core`, just:
-
-```bash
-npm run copy-ffmpeg
-git add render-server/public/
-git commit -m "chore: update ffmpeg core"
-git push
-```
-
-Both Render and Vercel will auto-redeploy.
+1. Open the deployed Vercel app
+2. Upload your audio
+3. Click the **engine icon** in the bottom dock (⚡ = GPU, 🖥 = CPU)
+4. Click it again → **☁ icon turns sky-blue** = Cloud mode
+5. Click **Export** → progress bar shows upload (0-40%) then server render (40-95%)
+6. MP4 auto-downloads when done
 
 ---
 
 ## Troubleshooting
 
-### "status: missing-files" on `/health`
-The WASM files weren't committed. Run `npm run copy-ffmpeg`, commit the files, and push.
+### `/render` returns 500 "FFmpeg exited …"
+FFmpeg binary isn't available. Render.com's Linux instances have FFmpeg pre-installed.
+Check service logs: `Render Dashboard → your service → Logs`.
 
-### Service sleeps after inactivity (Free tier)
-Render's free tier sleeps services after 15 minutes of inactivity. The first request after sleep takes ~30 seconds (FFmpeg cold start). To avoid this:
-- Use a **Starter** plan ($7/mo), or
-- Use a free uptime monitoring service like [UptimeRobot](https://uptimerobot.com) to ping `/health` every 10 minutes.
+### Render is slow
+Upgrade to Starter or Standard instance. Free tier has only 0.1 CPU.
 
-### CORS errors in browser console
-Check that `Access-Control-Allow-Origin: *` is present in the response headers. Verify via:
-```bash
-curl -I https://sonic-ffmpeg.onrender.com/ffmpeg-core.wasm
-```
+### "VITE_FFMPEG_BASE_URL is not configured" error
+Set `VITE_FFMPEG_BASE_URL` in Vercel → Environment Variables → your Render.com URL.
 
-### FFmpeg fails to load in the app
-1. Check the browser console for the exact error
-2. Verify `VITE_FFMPEG_BASE_URL` is set correctly in Vercel (no trailing slash)
-3. Ensure the Render service passed its health check
-4. Try the FFmpeg engine toggle (🖥 CPU icon in the dock) — if it errors, the issue is the server; if it works, try re-deploying Vercel
-
----
-
-## Summary
-
-```
-GitHub push → Render auto-deploys FFmpeg server
-           → Vercel auto-deploys frontend
-
-User visits Vercel URL
-  ├── Downloads frontend JS from Vercel (COOP/COEP headers ✓)
-  └── When exporting: fetches ffmpeg-core.wasm from Render (CORP + CORS headers ✓)
-```
+### Canvas fails to install (`node-canvas`)
+The `canvas` npm package requires native build tools. Render.com's build environment has these.
+If it fails, check build logs for missing `libcairo` — add a `render.yaml` apt package.

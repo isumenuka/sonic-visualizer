@@ -94,28 +94,45 @@ export function BottomDock({
 
                 <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
 
-                {/* ── Export Engine Toggle (GPU ↔ CPU) ── */}
+                {/* ── Export Engine Toggle (GPU → CPU → Cloud) ── */}
                 <button
-                    onClick={() => onEngineChange(exportEngine === 'webcodecs' ? 'ffmpeg' : 'webcodecs')}
+                    onClick={() => {
+                        if (exportEngine === 'webcodecs') onEngineChange('ffmpeg');
+                        else if (exportEngine === 'ffmpeg') onEngineChange('server');
+                        else onEngineChange('webcodecs');
+                    }}
                     disabled={isExporting}
-                    title={exportEngine === 'webcodecs'
-                        ? 'GPU (WebCodecs) — click to switch to FFmpeg CPU'
-                        : 'FFmpeg CPU — click to switch to GPU (WebCodecs)'}
+                    title={
+                        exportEngine === 'webcodecs' ? 'GPU (WebCodecs) — click to switch to FFmpeg CPU'
+                            : exportEngine === 'ffmpeg' ? 'CPU (FFmpeg) — click to switch to Cloud render'
+                                : '☁ Cloud (Render.com server) — click to switch back to GPU'
+                    }
                     className={`p-2 sm:p-2.5 rounded-full transition-colors relative group shrink-0 ${isExporting ? 'cursor-not-allowed opacity-50' :
-                            exportEngine === 'webcodecs'
-                                ? 'text-emerald-400 hover:bg-emerald-400/10'
-                                : 'text-amber-400 hover:bg-amber-400/10'
+                        exportEngine === 'webcodecs'
+                            ? 'text-emerald-400 hover:bg-emerald-400/10'
+                            : exportEngine === 'ffmpeg'
+                                ? 'text-amber-400 hover:bg-amber-400/10'
+                                : 'text-sky-400 hover:bg-sky-400/10'
                         }`}
                 >
-                    {exportEngine === 'webcodecs'
-                        ? <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
-                        : <Cpu className="w-4 h-4 sm:w-5 sm:h-5" />}
+                    {exportEngine === 'webcodecs' ? (
+                        <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
+                    ) : exportEngine === 'ffmpeg' ? (
+                        <Cpu className="w-4 h-4 sm:w-5 sm:h-5" />
+                    ) : (
+                        <svg className="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" />
+                        </svg>
+                    )}
                     <span className="absolute -top-9 left-1/2 -translate-x-1/2 hidden sm:block bg-black/80 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
                         {exportEngine === 'webcodecs'
                             ? (webCodecsAvailable ? 'GPU Export (fast)' : 'GPU N/A')
-                            : 'CPU Export (FFmpeg)'}
+                            : exportEngine === 'ffmpeg'
+                                ? 'CPU Export (FFmpeg)'
+                                : '☁ Cloud Render (fastest for long)'}
                     </span>
                 </button>
+
 
                 {/* ── Quality selector ── */}
                 <div className="flex items-center gap-0.5 bg-white/5 rounded-full px-1 py-1 border border-white/10 shrink-0">

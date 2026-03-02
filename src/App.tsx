@@ -21,6 +21,7 @@ import {
 } from './visualizers/drawings';
 import { exportWithFFmpeg } from './utils/ffmpegExportEngine';
 import { exportWithWebCodecs } from './utils/exportEngine';
+import { exportWithServer } from './utils/serverExportEngine';
 
 import { CropModal } from './components/ui/CropModal';
 import { BottomDock } from './components/ui/BottomDock';
@@ -28,7 +29,7 @@ import { SettingsPanel } from './components/ui/SettingsPanel';
 import { ExportModal } from './components/ui/ExportModal';
 
 type AspectRatio = '16:9' | '9:16';
-export type ExportEngine = 'webcodecs' | 'ffmpeg';
+export type ExportEngine = 'webcodecs' | 'ffmpeg' | 'server';
 
 export default function App() {
   // ── Media state ──────────────────────────────────────────────────────────
@@ -144,14 +145,44 @@ export default function App() {
 
     const engineFn = exportEngine === 'webcodecs' ? exportWithWebCodecs : exportWithFFmpeg;
 
+    // resumeApp must be declared before any early-return paths
     const resumeApp = () => {
-      // Restart the canvas animation loop using stored renderFrame reference
       if (animationRef.current === 0 && renderFrameRef.current) {
         animationRef.current = requestAnimationFrame(renderFrameRef.current);
       }
-      // Resume Web Audio so analyser works again
       audioContextRef.current?.resume();
     };
+
+    if (exportEngine === 'server') {
+      // ── Cloud render: send audio + settings to Render.com server ────────────
+      try {
+        await exportWithServer({
+          audioFile,
+          quality: recordingQuality,
+          aspectRatio,
+          settings: settingsRef.current,
+          onProgress: (pct, stage) => {
+            setExportProgress(pct);
+            // Reuse exportSpeed as a stage label indicator (0 = uploading, 1 = rendering)
+            setExportSpeed(stage.startsWith('Server') ? 1 : 0);
+          },
+          signal: abortController.signal,
+        });
+        setIsExporting(false);
+        isExportingRef.current = false;
+        exportAbortRef.current = null;
+        resumeApp();
+      } catch (err: any) {
+        setIsExporting(false);
+        isExportingRef.current = false;
+        exportAbortRef.current = null;
+        resumeApp();
+        if (!abortController.signal.aborted) {
+          setExportError(err?.message || String(err));
+        }
+      }
+      return;  // server path handled above, skip local encoder below
+    }
 
     try {
       await engineFn({
