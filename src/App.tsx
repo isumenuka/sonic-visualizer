@@ -31,6 +31,7 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportSpeed, setExportSpeed] = useState(0);
   const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
@@ -100,12 +101,18 @@ export default function App() {
         onProgress: (pct, speedX) => { setExportProgress(pct); setExportSpeed(speedX); },
         signal: abortController.signal,
       });
-    } catch (err: any) {
-      if (!abortController.signal.aborted) alert(`Export failed: ${err?.message ?? err}`);
-    } finally {
       setIsExporting(false);
       isExportingRef.current = false;
       exportAbortRef.current = null;
+    } catch (err: any) {
+      if (!abortController.signal.aborted) {
+        setExportError(err?.message || String(err));
+        console.error('[Export Error]', err);
+      } else {
+        setIsExporting(false);
+        isExportingRef.current = false;
+        exportAbortRef.current = null;
+      }
     }
   };
 
@@ -113,6 +120,7 @@ export default function App() {
     exportAbortRef.current?.abort();
     setIsExporting(false);
     isExportingRef.current = false;
+    setExportError(null);
   };
 
   useEffect(() => {
@@ -538,7 +546,7 @@ export default function App() {
       {cropSrc && <CropModal src={cropSrc} onConfirm={handleCropConfirm} onCancel={() => setCropSrc(null)} />}
 
       {/* ── Export modal ── */}
-      <ExportModal isOpen={isExporting} progress={exportProgress} speed={exportSpeed} onCancel={cancelExport} />
+      <ExportModal isOpen={isExporting} progress={exportProgress} speed={exportSpeed} error={exportError} onCancel={cancelExport} />
     </div>
   );
 }

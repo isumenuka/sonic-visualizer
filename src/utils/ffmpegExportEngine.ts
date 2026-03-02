@@ -1,5 +1,7 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile } from '@ffmpeg/util';
+// @ts-ignore: Vite ?url import is not recognized by standard TS setup
+import workerURL from '@ffmpeg/ffmpeg/worker?url';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import {
     drawCircularBars, drawCircularWave, drawSpiral, drawParticles,
     drawRing, drawStrings, drawOrbit, drawSpikes, drawLaser,
@@ -232,7 +234,7 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
     onProgress(0, 0); // "Initializing FFmpeg (WebAssembly Engine)..."
 
     // In React/Vite, we can access the core by letting @ffmpeg/ffmpeg fetch from unpkg
-    // or passing the URLs explicitly.
+    // or passing the URLs explicitly. For multithreading (SharedArrayBuffer) we use core-mt.
     const ffmpeg = new FFmpeg();
 
     ffmpeg.on('log', ({ message }) => {
@@ -246,9 +248,11 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
         onProgress(50 + (transcodeProgress * 50), 0);
     });
 
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
     await ffmpeg.load({
-        coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-        wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        classWorkerURL: workerURL,
     });
 
     if (signal.aborted) return;
@@ -317,7 +321,7 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
         await ffmpeg.writeFile(`f_${fi}.jpg`, new Uint8Array(buf));
 
         // Let the UI breathe and update progress map 0-50% to rendering
-        if (fi % 10 === 0) {
+        if (fi % 1 === 0) { // update every frame to prevent hanging visual
             await new Promise((r) => setTimeout(r, 0));
             const elapsed = (performance.now() - startTime) / 1000;
             const videoSec = fi / FPS;
