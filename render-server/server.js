@@ -115,22 +115,49 @@ app.post('/render', upload.single('audio'), async (req, res) => {
         const rawPcmPath = path.join(tmpDir, 'audio.pcm');
         await execFileAsync('ffmpeg', [
             '-i', audioPath,
-            '-ac', '1',          // mono for FFT
+            '-ac', '1',       // mono for FFT
             '-ar', '44100',
-            '-f', 'f32le',       // raw 32-bit float little-endian
+            '-f', 'f32le',    // raw 32-bit float LE
             rawPcmPath,
         ]);
-        const rawPcm = fs.readFileSync(rawPcmPath);
-        const monoPCM = new Float32Array(rawPcm.buffer, rawPcm.byteOffset, rawPcm.byteLength / 4);
+        let rawPcm = fs.readFileSync(rawPcmPath);
+        // Delete PCM temp file immediately — it's now in rawPcm Buffer
+        try { fs.unlinkSync(rawPcmPath); } catch { }
+
+        // View the raw bytes as Float32 WITHOUT copying (same underlying memory)
+        let monoPCM = new Float32Array(rawPcm.buffer, rawPcm.byteOffset, rawPcm.byteLength / 4);
         const SR = 44100;
         const duration = monoPCM.length / SR;
         const totalFrames = Math.ceil(duration * FPS);
         console.log(`[/render] Audio decoded: ${duration.toFixed(1)}s → ${totalFrames} frames`);
 
+        // ── Pre-compute ALL FFT frames → compact Uint8Array ───────────────────
+        // A 23-min song PCM = ~244 MB. By pre-computing FFT first (1024 bytes/frame)
+        // we only need ~42 MB for 41k frames, then we can free the 244 MB PCM.
+        console.log(`[/render] Pre-computing FFT (${totalFrames} frames)…`);
+        const HALF_FFT = FFT_SIZE >> 1;  // 1024
+        const allFFTData = new Uint8Array(totalFrames * HALF_FFT);
+        const smoothedMags = new Float32Array(HALF_FFT);
+        for (let fi = 0; fi < totalFrames; fi++) {
+            const sampleOffset = Math.floor((fi / FPS) * SR);
+            const frame = getByteFrequencyData(monoPCM, sampleOffset, FFT_SIZE, smoothedMags);
+            allFFTData.set(frame, fi * HALF_FFT);
+        }
+
+        // ── FREE PCM BUFFER — frees ~244 MB before the render loop ────────────
+        // This is the critical step that prevents OOM on Render's 512 MB free tier.
+        monoPCM = null;
+        rawPcm = null;
+        // Yield to let GC run before heavy canvas + FFmpeg allocations
+        await new Promise(r => setTimeout(r, 100));
+        console.log(`[/render] FFT pre-computed. PCM buffer freed. Starting render…`);
+
+
+
         // ── Set up canvas ──────────────────────────────────────────────────────
         const canvas = createCanvas(W, H);
         const ctx = canvas.getContext('2d');
-        const smoothedMags = new Float32Array(FFT_SIZE >> 1);
+        // smoothedMags already used in FFT pre-computation above; not needed here
         const state = {
             rotation: 0,
             colorCycleHue: 0,
@@ -201,11 +228,12 @@ app.post('/render', upload.single('audio'), async (req, res) => {
             ffmpegProc.on('error', reject);
         });
 
-        // ── Render each frame → write RGBA buffer to ffmpeg stdin ─────────────
+        // ── Render each frame using pre-computed FFT data ─────────────────────
+        // PCM is already freed. Look up the pre-computed FFT slice for each frame.
         let framesDone = 0;
         for (let fi = 0; fi < totalFrames; fi++) {
-            const sampleOffset = Math.floor((fi / FPS) * SR);
-            const dataArray = getByteFrequencyData(monoPCM, sampleOffset, FFT_SIZE, smoothedMags);
+            // Slice the pre-computed FFT for this frame (no PCM access needed)
+            const dataArray = allFFTData.subarray(fi * HALF_FFT, (fi + 1) * HALF_FFT);
 
             renderFrame(ctx, W, H, dataArray, s, state);
 
