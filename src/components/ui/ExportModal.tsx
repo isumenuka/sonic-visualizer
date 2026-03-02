@@ -107,14 +107,14 @@ export function ExportModal({ isOpen, progress, speed, error, engine, onCancel }
                                     </h3>
                                     <p className="text-xs text-neutral-500 mt-0.5">
                                         {isDone
-                                            ? `Your ${engine === 'webcodecs' ? 'MP4/WebM' : 'MP4'} is downloading…`
+                                            ? `Your MP4 is downloading…`
                                             : speedLabel}
                                     </p>
                                     {/* Engine badge */}
                                     {!isDone && (
                                         <span className={`inline-block mt-1.5 px-2 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wider ${engine === 'webcodecs'
-                                                ? 'bg-emerald-400/15 text-emerald-400'
-                                                : 'bg-amber-400/15 text-amber-400'
+                                            ? 'bg-emerald-400/15 text-emerald-400'
+                                            : 'bg-amber-400/15 text-amber-400'
                                             }`}>
                                             {engine === 'webcodecs' ? '⚡ GPU' : '🖥 FFmpeg'}
                                         </span>

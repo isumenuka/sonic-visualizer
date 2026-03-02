@@ -323,30 +323,22 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         throw new Error('WebCodecs not supported. Please use Chrome 94+ or Edge 94+.');
     }
 
-    // ── 3. Probe AAC support → choose MP4 or WebM ────────────────────────────
-    let useAAC = false;
-    try {
-        const probe = await AudioEncoder.isConfigSupported({
-            codec: 'aac',
-            sampleRate: encBuf.sampleRate,
-            numberOfChannels: numChannels,
-            bitrate: 256_000,
-        });
-        useAAC = probe.supported === true;
-    } catch { useAAC = false; }
-
-    // ── 4. Set up video encoder config ────────────────────────────────────────
-    let videoCodecStr: string;
-    let videoHW: HardwareAcceleration;
-
-    if (useAAC) {
-        const resolved = await resolveH264Codec(width, height);
-        videoCodecStr = resolved.codec;
-        videoHW = resolved.hardwareAcceleration;
-    } else {
-        videoCodecStr = 'vp09.00.10.08';
-        videoHW = 'prefer-software';
+    // ── 3. Verify AAC is supported (required for YouTube MP4 export) ──────────
+    const aacProbe = await AudioEncoder.isConfigSupported({
+        codec: 'aac',
+        sampleRate: encBuf.sampleRate,
+        numberOfChannels: numChannels,
+        bitrate: 320_000,
+    }).catch(() => ({ supported: false }));
+    if (!aacProbe.supported) {
+        throw new Error(
+            'AAC audio encoding is not supported in this browser. ' +
+            'Please use Chrome 94+ or Edge 94+ on Windows/macOS to export MP4.',
+        );
     }
+
+    // ── 4. Set up video encoder config (H.264 + AAC → MP4 for YouTube) ───────
+    const { codec: videoCodecStr, hardwareAcceleration: videoHW } = await resolveH264Codec(width, height);
 
     const videoEncoderConfig: VideoEncoderConfig = {
         codec: videoCodecStr,
@@ -358,46 +350,24 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         latencyMode: 'quality',
     };
 
-    // ── 5. Set up muxer (MP4+AAC  or  WebM+Opus) ─────────────────────────────
+    // ── 5. Set up MP4 muxer (H.264 + AAC) ────────────────────────────────────
     type AddVideo = (c: EncodedVideoChunk, m: EncodedVideoChunkMetadata) => void;
     type AddAudio = (c: EncodedAudioChunk, m: EncodedAudioChunkMetadata) => void;
 
-    let addVideoChunk!: AddVideo;
-    let addAudioChunk!: AddAudio;
-    let finalizeMuxer!: () => ArrayBuffer;
-    let outputMimeType!: string;
-    let outputExt!: string;
-
-    if (useAAC) {
-        const { Muxer: Mp4Muxer, ArrayBufferTarget: Mp4Target } = await import('mp4-muxer');
-        const mp4Target = new Mp4Target();
-        const mp4 = new Mp4Muxer({
-            target: mp4Target,
-            video: { codec: 'avc', width, height, frameRate: FPS },
-            audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
-            firstTimestampBehavior: 'offset',
-            fastStart: 'in-memory',
-        });
-        addVideoChunk = (c, m) => mp4.addVideoChunk(c, m);
-        addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
-        finalizeMuxer = () => { mp4.finalize(); return (mp4Target as any).buffer as ArrayBuffer; };
-        outputMimeType = 'video/mp4';
-        outputExt = 'mp4';
-    } else {
-        const { Muxer: WebmMuxer, ArrayBufferTarget: WebmTarget } = await import('webm-muxer');
-        const webmTarget = new WebmTarget();
-        const webm = new WebmMuxer({
-            target: webmTarget,
-            video: { codec: 'V_VP9', width, height, frameRate: FPS },
-            audio: { codec: 'A_OPUS', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
-            firstTimestampBehavior: 'offset',
-        });
-        addVideoChunk = (c, m) => webm.addVideoChunk(c, m);
-        addAudioChunk = (c, m) => webm.addAudioChunk(c, m);
-        finalizeMuxer = () => { webm.finalize(); return (webmTarget as any).buffer as ArrayBuffer; };
-        outputMimeType = 'video/webm';
-        outputExt = 'webm';
-    }
+    const { Muxer: Mp4Muxer, ArrayBufferTarget: Mp4Target } = await import('mp4-muxer');
+    const mp4Target = new Mp4Target();
+    const mp4 = new Mp4Muxer({
+        target: mp4Target,
+        video: { codec: 'avc', width, height, frameRate: FPS },
+        audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+        firstTimestampBehavior: 'offset',
+        fastStart: 'in-memory',
+    });
+    const addVideoChunk: AddVideo = (c, m) => mp4.addVideoChunk(c, m);
+    const addAudioChunk: AddAudio = (c, m) => mp4.addAudioChunk(c, m);
+    const finalizeMuxer = () => { mp4.finalize(); return (mp4Target as any).buffer as ArrayBuffer; };
+    const outputMimeType = 'video/mp4';
+    const outputExt = 'mp4';
 
     // ── 6. Video encoder ──────────────────────────────────────────────────────
     let videoError: Error | null = null;
@@ -407,18 +377,17 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     });
     videoEncoder.configure(videoEncoderConfig);
 
-    // ── 7. Audio encoder + feed all audio chunks now (runs in parallel) ───────
-    const audioCodecStr = useAAC ? 'aac' : 'opus';
+    // ── 7. Audio encoder (AAC 320 kbps) + feed all audio chunks now ──────────
     let audioError: Error | null = null;
     const audioEncoder = new AudioEncoder({
         output: (chunk, meta) => addAudioChunk(chunk, meta!),
         error: (e) => { audioError = e; },
     });
     audioEncoder.configure({
-        codec: audioCodecStr,
+        codec: 'aac',
         sampleRate: encBuf.sampleRate,
         numberOfChannels: numChannels,
-        bitrate: useAAC ? 320_000 : 256_000,
+        bitrate: 320_000,
     });
 
     const AUDIO_CHUNK = encBuf.sampleRate; // 1 sec per chunk
