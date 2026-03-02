@@ -6,7 +6,7 @@
  * if AAC is not natively available.
  *
  * FFmpeg core files are loaded from:
- *   1. VITE_FFMPEG_BASE_URL env var (set in Vercel → points to Render.com)
+ *   1. VITE_CLOUD_RUN_URL env var (set in Vercel → points to Google Cloud Run)
  *   2. /ffmpeg/ local path (auto-used in `npm run dev`)
  */
 
@@ -238,12 +238,11 @@ function renderExportFrame(
 // ─── Resolve FFmpeg Base URL ──────────────────────────────────────────────────
 
 function getFFmpegBaseURL(): string {
-    // In production (Vercel), VITE_FFMPEG_BASE_URL is set to the Render.com service URL.
+    // In production (Vercel), VITE_CLOUD_RUN_URL points to Google Cloud Run.
     // In development, fall back to /ffmpeg (served from public/ffmpeg/ by Vite dev server).
-    const renderURL = import.meta.env.VITE_FFMPEG_BASE_URL as string | undefined;
-    if (renderURL && renderURL.trim()) {
-        // Ensure no trailing slash, then append /ffmpeg
-        return renderURL.replace(/\/$/, '') + '/ffmpeg';
+    const cloudRunURL = import.meta.env.VITE_CLOUD_RUN_URL as string | undefined;
+    if (cloudRunURL && cloudRunURL.trim()) {
+        return cloudRunURL.replace(/\/$/, '') + '/ffmpeg';
     }
     return `${window.location.origin}/ffmpeg`;
 }
@@ -268,7 +267,7 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
         onProgress(50 + Math.min(progress, 1) * 50, 0);
     });
 
-    // Load core from Render.com (prod) or /ffmpeg local path (dev)
+    // Load core from Cloud Run (prod) or /ffmpeg local path (dev)
     const baseURL = getFFmpegBaseURL();
     console.log(`[FFmpeg] Loading core from: ${baseURL}`);
 

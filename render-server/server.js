@@ -1,14 +1,14 @@
 /**
- * Sonic Visualizer — FFmpeg WASM Static Server + Server-Side Render API v2
- * =========================================================================
- * Deploy this to Render.com as a Web Service (Node.js).
+ * Sonic Visualizer — Render Server v3
+ * =====================================
+ * Async job queue — fixes the 30-second Render.com proxy timeout.
  *
- * Endpoints:
- *   GET  /                → info
- *   GET  /health          → WASM file status
- *   GET  /ffmpeg-core.js  → FFmpeg WASM JS shim
- *   GET  /ffmpeg-core.wasm → FFmpeg WASM binary
- *   POST /render          → server-side video render (audio + settings → MP4)
+ * API:
+ *   POST /render          → { jobId }   (responds immediately, renders in background)
+ *   GET  /status/:jobId   → { status, progress, error? }
+ *   GET  /download/:jobId → streams finished MP4
+ *   GET  /health          → { status, renderApi: true }
+ *   GET  /ffmpeg-core.*   → static WASM files with security headers
  */
 
 import express from 'express';
@@ -18,6 +18,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
+import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { createCanvas } from 'canvas';
 import { renderFrame, getByteFrequencyData } from './renderer.js';
@@ -29,9 +30,23 @@ const PORT = process.env.PORT || 3001;
 
 if (!fs.existsSync(PUBLIC)) fs.mkdirSync(PUBLIC, { recursive: true });
 
-const app = express();
+// ── In-memory job store ───────────────────────────────────────────────────────
+// { [jobId]: { status: 'queued'|'processing'|'done'|'error', progress: 0-100,
+//              outputPath, tmpDir, error, createdAt } }
+const jobs = new Map();
 
-// ── CORS ─────────────────────────────────────────────────────────────────────
+// Clean up jobs older than 1 hour
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, job] of jobs) {
+        if (now - job.createdAt > 60 * 60 * 1000) {
+            try { fs.rmSync(job.tmpDir, { recursive: true }); } catch { }
+            jobs.delete(id);
+        }
+    }
+}, 10 * 60 * 1000);
+
+const app = express();
 app.use(cors({ origin: '*' }));
 
 // ── Security headers ──────────────────────────────────────────────────────────
@@ -46,7 +61,6 @@ app.use((req, res, next) => {
     next();
 });
 
-// ── Multer: accept audio file in memory (max 200 MB) ─────────────────────────
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024 } });
 
 // ── Static WASM files ─────────────────────────────────────────────────────────
@@ -58,84 +72,108 @@ app.use(express.static(PUBLIC, {
     },
 }));
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// ── Health ────────────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
     const coreJs = fs.existsSync(path.join(PUBLIC, 'ffmpeg-core.js'));
     const coreWasm = fs.existsSync(path.join(PUBLIC, 'ffmpeg-core.wasm'));
-    res.json({
-        status: coreJs && coreWasm ? 'ok' : 'missing-files',
-        files: { 'ffmpeg-core.js': coreJs, 'ffmpeg-core.wasm': coreWasm },
-        renderApi: true,
-    });
+    res.json({ status: coreJs && coreWasm ? 'ok' : 'missing-files', renderApi: true, activeJobs: jobs.size });
 });
 
-// ── Root ──────────────────────────────────────────────────────────────────────
-app.get('/', (_req, res) => {
-    res.json({
-        name: 'Sonic Visualizer — Render Server v2',
-        endpoints: { health: '/health', render: 'POST /render' },
-    });
-});
+app.get('/', (_req, res) => res.json({ name: 'Sonic Visualizer Render Server v3', endpoints: ['POST /render', 'GET /status/:jobId', 'GET /download/:jobId'] }));
 
-// ── /render — server-side video rendering ─────────────────────────────────────
-// POST multipart/form-data:
-//   audio    : audio file (mp3, wav, ogg, …)
-//   settings : JSON string with VisualizerSettings
-//   quality  : '1080p' | '2k' | '4k'   (default: '1080p')
-//   aspect   : '16:9' | '9:16'           (default: '16:9')
-app.post('/render', upload.single('audio'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No audio file uploaded' });
-    }
+// ── POST /render — queue a render job ────────────────────────────────────────
+// Responds immediately with { jobId }. Render happens in background.
+app.post('/render', upload.single('audio'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No audio file' });
 
     let settings;
-    try {
-        settings = JSON.parse(req.body.settings || '{}');
-    } catch {
-        return res.status(400).json({ error: 'Invalid settings JSON' });
-    }
+    try { settings = JSON.parse(req.body.settings || '{}'); }
+    catch { return res.status(400).json({ error: 'Invalid settings JSON' }); }
 
     const qualityMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
     let [W, H] = qualityMap[req.body.quality] || [1920, 1080];
     if (req.body.aspect === '9:16') [W, H] = [H, W];
 
+    const jobId = randomUUID();
+    const tmpDir = fs.mkdtempSync(path.join('/tmp', 'sonic-'));
+    jobs.set(jobId, { status: 'queued', progress: 0, outputPath: null, tmpDir, error: null, createdAt: Date.now() });
+
+    // Respond immediately — before any rendering starts
+    res.json({ jobId });
+
+    // Start render in background (don't await)
+    processRender(jobId, req.file, settings, W, H, tmpDir).catch(err => {
+        console.error(`[job:${jobId}] Unhandled error:`, err);
+        const job = jobs.get(jobId);
+        if (job) { job.status = 'error'; job.error = err.message; }
+    });
+});
+
+// ── GET /status/:jobId ────────────────────────────────────────────────────────
+app.get('/status/:jobId', (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.json({ status: job.status, progress: job.progress, error: job.error || undefined });
+});
+
+// ── GET /download/:jobId ──────────────────────────────────────────────────────
+app.get('/download/:jobId', (req, res) => {
+    const job = jobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    if (job.status !== 'done') return res.status(409).json({ error: `Job not ready (status: ${job.status})` });
+    if (!job.outputPath || !fs.existsSync(job.outputPath)) return res.status(410).json({ error: 'Output file missing' });
+
+    const stat = fs.statSync(job.outputPath);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Disposition', 'attachment; filename="sonic-visualizer.mp4"');
+    const stream = fs.createReadStream(job.outputPath);
+    stream.pipe(res);
+    stream.on('end', () => {
+        // Cleanup after download
+        setTimeout(() => {
+            try { fs.rmSync(job.tmpDir, { recursive: true }); } catch { }
+            jobs.delete(req.params.jobId);
+        }, 30_000);
+    });
+});
+
+// ── Background render function ────────────────────────────────────────────────
+async function processRender(jobId, file, settings, W, H, tmpDir) {
+    const job = jobs.get(jobId);
     const FPS = 30;
     const FFT_SIZE = 2048;
-
-    console.log(`[/render] Starting: ${W}×${H} @${FPS}fps, audio=${req.file.size} bytes`);
-
-    // ── Write audio to temp file so ffmpeg can decode it ──────────────────────
-    const tmpDir = fs.mkdtempSync(path.join('/tmp', 'sonic-'));
-    const audioPath = path.join(tmpDir, `audio${path.extname(req.file.originalname) || '.mp3'}`);
-    const outputPath = path.join(tmpDir, 'output.mp4');
-    fs.writeFileSync(audioPath, req.file.buffer);
+    const HALF_FFT = FFT_SIZE >> 1;
 
     try {
-        // ── Decode audio to raw PCM float32 mono at 44100 Hz ──────────────────
-        const rawPcmPath = path.join(tmpDir, 'audio.pcm');
-        await execFileAsync('ffmpeg', [
-            '-i', audioPath,
-            '-ac', '1',       // mono for FFT
-            '-ar', '44100',
-            '-f', 'f32le',    // raw 32-bit float LE
-            rawPcmPath,
-        ]);
-        let rawPcm = fs.readFileSync(rawPcmPath);
-        // Delete PCM temp file immediately — it's now in rawPcm Buffer
-        try { fs.unlinkSync(rawPcmPath); } catch { }
+        job.status = 'processing';
+        job.progress = 1;
 
-        // View the raw bytes as Float32 WITHOUT copying (same underlying memory)
+        // Write audio to disk
+        const audioPath = path.join(tmpDir, `audio${path.extname(file.originalname) || '.mp3'}`);
+        const outputPath = path.join(tmpDir, 'output.mp4');
+        fs.writeFileSync(audioPath, file.buffer);
+        // Release the upload buffer from memory
+        file.buffer = null;
+
+        // Decode audio → PCM
+        job.progress = 3;
+        const rawPcmPath = path.join(tmpDir, 'audio.pcm');
+        await execFileAsync('ffmpeg', ['-i', audioPath, '-ac', '1', '-ar', '44100', '-f', 'f32le', rawPcmPath]);
+        console.log(`[job:${jobId}] Audio decoded`);
+
+        let rawPcm = fs.readFileSync(rawPcmPath);
+        try { fs.unlinkSync(rawPcmPath); } catch { }
         let monoPCM = new Float32Array(rawPcm.buffer, rawPcm.byteOffset, rawPcm.byteLength / 4);
+
         const SR = 44100;
         const duration = monoPCM.length / SR;
         const totalFrames = Math.ceil(duration * FPS);
-        console.log(`[/render] Audio decoded: ${duration.toFixed(1)}s → ${totalFrames} frames`);
+        console.log(`[job:${jobId}] ${duration.toFixed(1)}s → ${totalFrames} frames`);
 
-        // ── Pre-compute ALL FFT frames → compact Uint8Array ───────────────────
-        // A 23-min song PCM = ~244 MB. By pre-computing FFT first (1024 bytes/frame)
-        // we only need ~42 MB for 41k frames, then we can free the 244 MB PCM.
-        console.log(`[/render] Pre-computing FFT (${totalFrames} frames)…`);
-        const HALF_FFT = FFT_SIZE >> 1;  // 1024
+        // ── Pre-compute ALL FFT frames → free 244 MB PCM ──────────────────────
+        job.progress = 5;
+        console.log(`[job:${jobId}] Pre-computing FFT…`);
         const allFFTData = new Uint8Array(totalFrames * HALF_FFT);
         const smoothedMags = new Float32Array(HALF_FFT);
         for (let fi = 0; fi < totalFrames; fi++) {
@@ -143,161 +181,88 @@ app.post('/render', upload.single('audio'), async (req, res) => {
             const frame = getByteFrequencyData(monoPCM, sampleOffset, FFT_SIZE, smoothedMags);
             allFFTData.set(frame, fi * HALF_FFT);
         }
+        // FREE the 244 MB PCM buffer before the render loop
+        monoPCM = null; rawPcm = null;
+        await new Promise(r => setTimeout(r, 100)); // let GC run
+        console.log(`[job:${jobId}] PCM freed. Starting render…`);
+        job.progress = 10;
 
-        // ── FREE PCM BUFFER — frees ~244 MB before the render loop ────────────
-        // This is the critical step that prevents OOM on Render's 512 MB free tier.
-        monoPCM = null;
-        rawPcm = null;
-        // Yield to let GC run before heavy canvas + FFmpeg allocations
-        await new Promise(r => setTimeout(r, 100));
-        console.log(`[/render] FFT pre-computed. PCM buffer freed. Starting render…`);
-
-
-
-        // ── Set up canvas ──────────────────────────────────────────────────────
+        // ── Canvas + settings ─────────────────────────────────────────────────
         const canvas = createCanvas(W, H);
         const ctx = canvas.getContext('2d');
-        // smoothedMags already used in FFT pre-computation above; not needed here
-        const state = {
-            rotation: 0,
-            colorCycleHue: 0,
-        };
-
-        // ── Fill default settings ──────────────────────────────────────────────
+        const state = { rotation: 0, colorCycleHue: 0 };
         const s = {
-            type: 'bars',
-            primaryColor: '#00ff88',
-            secondaryColor: '#00aaff',
-            sensitivity: 1.5,
-            barWidth: 3,
-            radius: Math.min(W, H) * 0.25,
-            rotationSpeed: 0,
-            glowEnabled: true,
-            trailEnabled: false,
-            pulseEnabled: false,
-            colorCycle: false,
-            echoEnabled: false,
-            invertColors: false,
-            shakeEnabled: false,
-            bgParticlesEnabled: false,
-            centerMode: 'text',
-            centerText: 'SONIC',
-            centerTextSize: 20,
-            centerColor: '#000000',
-            logoScale: 0.5,
-            bgBlur: 10,
-            bgOpacity: 0.5,
-            mirror: true,
-            performanceMode: false,
+            type: 'bars', primaryColor: '#00ff88', secondaryColor: '#00aaff',
+            sensitivity: 1.5, barWidth: 3, radius: Math.min(W, H) * 0.25,
+            rotationSpeed: 0, glowEnabled: true, trailEnabled: false,
+            pulseEnabled: false, colorCycle: false, echoEnabled: false,
+            invertColors: false, shakeEnabled: false, bgParticlesEnabled: false,
+            centerMode: 'text', centerText: 'SONIC', centerTextSize: 20,
+            centerColor: '#000000', logoScale: 0.5, bgBlur: 10, bgOpacity: 0.5,
+            mirror: true, performanceMode: false,
             ...settings,
         };
-        // Scale radius to canvas size if it's using a small default from the browser
         if (s.radius < 50) s.radius = Math.min(W, H) * 0.25;
 
-        // ── Spawn FFmpeg to encode frames piped via stdin ──────────────────────
-        const ffmpegArgs = [
-            // Video input: raw BGRA frames from stdin
-            // node-canvas toBuffer('raw') gives Cairo's native BGRA (on Linux x86 little-endian)
-            '-f', 'rawvideo',
-            '-pix_fmt', 'bgra',
-            '-s', `${W}x${H}`,
-            '-r', String(FPS),
-            '-i', 'pipe:0',
-            // Audio input
+        // ── FFmpeg encode ─────────────────────────────────────────────────────
+        const ffmpegProc = spawn('ffmpeg', [
+            '-f', 'rawvideo', '-pix_fmt', 'bgra', '-s', `${W}x${H}`, '-r', String(FPS), '-i', 'pipe:0',
             '-i', audioPath,
-            // Video encode: H.264 ultrafast (3-5× faster than fast, same perceptual quality at CRF 18)
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-crf', '18',
-            '-pix_fmt', 'yuv420p',
-            '-threads', '0',        // use all CPU cores
-            // Audio encode: AAC 192k
-            '-c:a', 'aac',
-            '-b:a', '192k',
-            '-shortest',
-            // Output
-            '-movflags', '+faststart',
-            '-y', outputPath,
-        ];
-
-        const ffmpegProc = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-        ffmpegProc.stderr.on('data', (d) => process.stdout.write('[ffmpeg] ' + d));
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p', '-threads', '0',
+            '-c:a', 'aac', '-b:a', '192k', '-shortest',
+            '-movflags', '+faststart', '-y', outputPath,
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        ffmpegProc.stderr.on('data', d => process.stdout.write(`[job:${jobId}][ffmpeg] ` + d));
 
         const ffmpegDone = new Promise((resolve, reject) => {
-            ffmpegProc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`FFmpeg exited ${code}`)));
+            ffmpegProc.on('close', code => code === 0 ? resolve() : reject(new Error(`FFmpeg exited ${code}`)));
             ffmpegProc.on('error', reject);
         });
 
-        // ── Render each frame using pre-computed FFT data ─────────────────────
-        // PCM is already freed. Look up the pre-computed FFT slice for each frame.
-        let framesDone = 0;
+        // ── Render loop ───────────────────────────────────────────────────────
         for (let fi = 0; fi < totalFrames; fi++) {
-            // Slice the pre-computed FFT for this frame (no PCM access needed)
             const dataArray = allFFTData.subarray(fi * HALF_FFT, (fi + 1) * HALF_FFT);
-
             renderFrame(ctx, W, H, dataArray, s, state);
 
-            // canvas.toBuffer('raw') returns the native Cairo pixel buffer (BGRA on Linux)
-            // directly — no JS ImageData object allocation, no copy. Much faster than getImageData.
             const rawBuf = canvas.toBuffer('raw');
             const ok = ffmpegProc.stdin.write(rawBuf);
+            if (!ok) await new Promise(r => ffmpegProc.stdin.once('drain', r));
 
-            // Backpressure: if stdin buffer full, wait for drain
-            if (!ok) {
-                await new Promise(r => ffmpegProc.stdin.once('drain', r));
+            // Update progress: 10% → 95% during render
+            if (fi % 60 === 0) {
+                job.progress = Math.round(10 + (fi / totalFrames) * 85);
+                console.log(`[job:${jobId}] ${fi}/${totalFrames} frames (${job.progress}%)`);
             }
-
-            framesDone++;
-            if (fi % 30 === 0) console.log(`[/render] ${fi}/${totalFrames} frames (${Math.round(fi / totalFrames * 100)}%)`);
         }
 
         ffmpegProc.stdin.end();
         await ffmpegDone;
-        console.log(`[/render] Encoding done → ${outputPath}`);
 
-        // ── Stream the finished MP4 to the client ─────────────────────────────
-        const stat = fs.statSync(outputPath);
-        res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Length', stat.size);
-        res.setHeader('Content-Disposition', 'attachment; filename="sonic-visualizer.mp4"');
-
-        const readStream = fs.createReadStream(outputPath);
-        readStream.pipe(res);
-        readStream.on('end', () => {
-            // Cleanup temp files after stream finishes
-            setTimeout(() => {
-                try { fs.rmSync(tmpDir, { recursive: true }); } catch { }
-            }, 5000);
-        });
+        job.outputPath = outputPath;
+        job.status = 'done';
+        job.progress = 100;
+        console.log(`[job:${jobId}] Done → ${outputPath}`);
 
     } catch (err) {
-        console.error('[/render] Error:', err);
-        // Cleanup on error
+        console.error(`[job:${jobId}] Error:`, err.message);
+        job.status = 'error';
+        job.error = err.message;
         try { fs.rmSync(tmpDir, { recursive: true }); } catch { }
-        if (!res.headersSent) {
-            res.status(500).json({ error: err.message || 'Render failed' });
-        }
     }
-});
+}
 
-// ── Listen ────────────────────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`[Server] Listening on port ${PORT}`);
     const coreJs = fs.existsSync(path.join(PUBLIC, 'ffmpeg-core.js'));
     const coreWasm = fs.existsSync(path.join(PUBLIC, 'ffmpeg-core.wasm'));
-    if (!coreJs || !coreWasm) {
-        console.warn('[Server] ⚠️  WASM files not found. Run `npm run copy-ffmpeg` from the main repo root.');
-    } else {
-        console.log('[Server] ✓ FFmpeg WASM files ready');
-    }
+    console.log(coreJs && coreWasm ? '[Server] ✓ FFmpeg WASM files ready' : '[Server] ⚠️  WASM files missing');
     console.log('[Server] ✓ POST /render endpoint active');
 
-    // Self-ping keep-alive (free tier)
-    const renderUrl = process.env.RENDER_EXTERNAL_URL;
-    if (renderUrl) {
-        setInterval(() => {
-            fetch(`${renderUrl}/health`).catch(() => { });
-        }, 10 * 60 * 1000);
-        console.log(`[Keep-Alive] Pinging ${renderUrl}/health every 10 min`);
+    // Cloud Run handles keep-alive automatically — no self-ping needed.
+    // (Unlike Render.com free tier, Cloud Run scales to zero but wakes up instantly on request)
+    const cloudRunUrl = process.env.K_SERVICE; // Cloud Run sets K_SERVICE automatically
+    if (cloudRunUrl) {
+        console.log(`[Cloud Run] Service: ${cloudRunUrl}`);
     }
 });

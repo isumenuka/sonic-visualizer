@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 /**
- * Server-Side Export Engine
- * Sends audio + settings to the Render.com /render API.
- * The server renders frames with node-canvas + native FFmpeg and streams back an MP4.
+ * Server-Side Export Engine v2 — Async Job Polling
+ *
+ * Flow:
+ *   1. POST /render  → server returns { jobId } immediately (no timeout)
+ *   2. Poll GET /status/:jobId every 3 seconds until status === 'done' | 'error'
+ *   3. GET /download/:jobId → download the finished MP4
  */
 
 export interface ServerExportOptions {
@@ -17,86 +20,96 @@ export interface ServerExportOptions {
 export async function exportWithServer(options: ServerExportOptions): Promise<void> {
     const { audioFile, quality, aspectRatio, settings, onProgress, signal } = options;
 
-    const baseUrl = import.meta.env.VITE_FFMPEG_BASE_URL;
+    // VITE_CLOUD_RUN_URL = Google Cloud Run server URL
+    const baseUrl = import.meta.env.VITE_CLOUD_RUN_URL;
     if (!baseUrl) {
-        throw new Error('VITE_FFMPEG_BASE_URL is not configured. Set it in Vercel → Environment Variables to your Render.com service URL.');
+        throw new Error(
+            'No render server configured. Set VITE_CLOUD_RUN_URL in Vercel → Environment Variables ' +
+            '(your Google Cloud Run URL, e.g. https://sonic-render-xxxx-uc.a.run.app)'
+        );
     }
+    const root = baseUrl.replace(/\/$/, '');
+    console.log(`[Cloud Export] Using Google Cloud Run: ${root}`);
 
-    const renderUrl = `${baseUrl.replace(/\/$/, '')}/render`;
-
-    // ── Build multipart form ──────────────────────────────────────────────────
+    // ── 1. Upload audio + settings → get jobId ───────────────────────────────
+    onProgress(0, 'Uploading audio…');
     const form = new FormData();
     form.append('audio', audioFile, audioFile.name);
     form.append('settings', JSON.stringify(settings));
     form.append('quality', quality);
     form.append('aspect', aspectRatio ?? '16:9');
 
-    // ── Upload + wait for server to finish rendering ──────────────────────────
-    onProgress(0, 'Uploading audio to render server…');
-
-    const response = await new Promise<Response>((resolve, reject) => {
+    // Upload via XHR for progress events
+    const jobId = await new Promise<string>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', renderUrl, true);
-        xhr.responseType = 'blob';
+        xhr.open('POST', `${root}/render`, true);
+        xhr.responseType = 'json';
 
-        // Report upload progress (0-40%)
         xhr.upload.onprogress = (e) => {
             if (e.lengthComputable) {
-                const pct = (e.loaded / e.total) * 40;
-                onProgress(pct, `Uploading… ${Math.round(pct)}%`);
+                onProgress((e.loaded / e.total) * 30, 'Uploading audio…');
             }
-        };
-
-        // After upload completes, server is rendering (40-95%)
-        xhr.upload.onload = () => {
-            onProgress(40, 'Server rendering video…');
-            // Simulate progress while server works — we don't get server-side progress
-            let fake = 40;
-            const iv = setInterval(() => {
-                fake = Math.min(fake + 0.5, 90);
-                onProgress(fake, 'Server encoding video…');
-            }, 1000);
-            (xhr as any)._fakeProgressInterval = iv;
         };
 
         xhr.onload = () => {
-            clearInterval((xhr as any)._fakeProgressInterval);
             if (xhr.status >= 200 && xhr.status < 300) {
-                resolve(new Response(xhr.response, {
-                    status: xhr.status,
-                    headers: { 'Content-Type': xhr.getResponseHeader('Content-Type') || 'video/mp4' },
-                }));
+                const data = xhr.response as { jobId?: string; error?: string };
+                if (data?.jobId) resolve(data.jobId);
+                else reject(new Error(data?.error || 'Server did not return a job ID'));
             } else {
-                // Try to parse error JSON from blob
-                const blob = xhr.response as Blob;
-                blob.text().then(text => {
-                    try { reject(new Error(JSON.parse(text).error || text)); }
-                    catch { reject(new Error(`Server returned ${xhr.status}: ${text.slice(0, 200)}`)); }
-                });
+                const msg = typeof xhr.response === 'object' ? xhr.response?.error : xhr.responseText;
+                reject(new Error(`Upload failed (${xhr.status}): ${msg}`));
             }
         };
-
-        xhr.onerror = () => {
-            clearInterval((xhr as any)._fakeProgressInterval);
-            reject(new Error('Network error — could not reach render server. Is VITE_FFMPEG_BASE_URL correct?'));
-        };
-
-        xhr.onabort = () => {
-            clearInterval((xhr as any)._fakeProgressInterval);
-            reject(new DOMException('Export cancelled', 'AbortError'));
-        };
+        xhr.onerror = () => reject(new Error('Network error — could not reach Cloud Run server. Is VITE_CLOUD_RUN_URL correct?'));
+        xhr.onabort = () => reject(new DOMException('Export cancelled', 'AbortError'));
 
         signal.addEventListener('abort', () => xhr.abort());
-
         xhr.send(form);
     });
 
     if (signal.aborted) return;
+    onProgress(30, 'Server rendering…');
+    console.log('[Cloud Export] Job started:', jobId);
 
-    onProgress(95, 'Downloading video…');
+    // ── 2. Poll /status/:jobId until done ────────────────────────────────────
+    const POLL_MS = 3000; // every 3 seconds
+    while (!signal.aborted) {
+        await new Promise(r => setTimeout(r, POLL_MS));
+        if (signal.aborted) return;
 
-    // ── Trigger browser download ──────────────────────────────────────────────
-    const blob = await response.blob();
+        const statusRes = await fetch(`${root}/status/${jobId}`, { signal });
+        const statusData = (await statusRes.json()) as { status: string; progress: number; error?: string };
+
+        if (statusData.status === 'error') {
+            throw new Error(`Server render failed: ${statusData.error || 'Unknown error'}`);
+        }
+
+        if (statusData.status === 'done') {
+            onProgress(96, 'Downloading video…');
+            break;
+        }
+
+        // Map server progress (0-100) → UI progress (30-95)
+        const uiPct = 30 + (statusData.progress / 100) * 65;
+        const stage = statusData.progress < 10
+            ? 'Decoding audio…'
+            : statusData.progress < 15
+                ? 'Pre-computing FFT…'
+                : `Rendering frame ${Math.round(statusData.progress)}%…`;
+        onProgress(uiPct, stage);
+    }
+
+    if (signal.aborted) return;
+
+    // ── 3. Download the finished MP4 ─────────────────────────────────────────
+    const dlRes = await fetch(`${root}/download/${jobId}`, { signal });
+    if (!dlRes.ok) {
+        const err = await dlRes.json().catch(() => ({ error: 'Download failed' }));
+        throw new Error(err.error || `Download failed (${dlRes.status})`);
+    }
+
+    const blob = await dlRes.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
