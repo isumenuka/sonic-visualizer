@@ -1,16 +1,21 @@
 /**
- * GPU-Accelerated WebCodecs Export Engine — v3
+ * GPU-Accelerated WebCodecs Export Engine — v4
  *
  * Audio codec strategy:
- *   1. Probe AAC support via AudioEncoder.isConfigSupported()
- *   2. If AAC supported → MP4 container (best compatibility)
- *   3. If AAC not supported (Linux, some builds) → Opus + WebM (always works)
+ *   1. Probe AAC at multiple bitrates (320k → 128k) via AudioEncoder.isConfigSupported()
+ *   2. If any AAC bitrate supported → H.264 + AAC → MP4
+ *   3. If AAC unsupported → VP9 + Opus → WebM (always works in Chrome/Edge/Firefox)
  *
  * Video codec strategy:
- *   1. H.264 High profile with GPU hardware acceleration (if AAC/MP4 path)
- *   2. VP9 software fallback (WebM path)
+ *   1. H.264 High profile with GPU hardware acceleration (AAC/MP4 path)
+ *   2. VP9 software fallback (WebM/Opus path)
+ *
+ * Memory strategy (long video fix):
+ *   - FileSystemWritableFileStreamTarget: chunks streamed to disk (peak RAM <50 MB)
+ *   - ArrayBufferTarget fallback: used when File System Access API unavailable
  *
  * Channel count guard: always clamp to [1, 2] to prevent "channel count 0" crash.
+ * Frame buffer guard: pre-allocate RGBA buf to prevent "Array buffer allocation failed".
  */
 
 import {
@@ -300,8 +305,6 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     }
 
     // ── CRITICAL: clamp channel count to [1,2] ────────────────────────────────
-    // Some audio decoders or resampled buffers may report 0 channels,
-    // which causes AudioEncoder.configure() to throw.
     const numChannels = Math.max(1, Math.min(2, encBuf.numberOfChannels || 1));
 
     // Mono PCM for FFT
@@ -323,22 +326,35 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         throw new Error('WebCodecs not supported. Please use Chrome 94+ or Edge 94+.');
     }
 
-    // ── 3. Verify AAC is supported (required for YouTube MP4 export) ──────────
-    const aacProbe = await AudioEncoder.isConfigSupported({
-        codec: 'aac',
-        sampleRate: encBuf.sampleRate,
-        numberOfChannels: numChannels,
-        bitrate: 320_000,
-    }).catch(() => ({ supported: false }));
-    if (!aacProbe.supported) {
-        throw new Error(
-            'AAC audio encoding is not supported in this browser. ' +
-            'Please use Chrome 94+ or Edge 94+ on Windows/macOS to export MP4.',
-        );
+    // ── 3. Probe for best audio codec ─────────────────────────────────────────
+    // Try multiple AAC bitrates — some browsers reject 320k in the probe even
+    // though they accept lower rates. If all AAC probes fail → Opus + WebM.
+    let useAAC = false;
+    let aacBitrate = 320_000;
+    for (const bitrate of [320_000, 256_000, 192_000, 128_000]) {
+        try {
+            const p = await AudioEncoder.isConfigSupported({
+                codec: 'aac',
+                sampleRate: encBuf.sampleRate,
+                numberOfChannels: numChannels,
+                bitrate,
+            });
+            if (p.supported) { useAAC = true; aacBitrate = bitrate; break; }
+        } catch { /* try next */ }
     }
 
-    // ── 4. Set up video encoder config (H.264 + AAC → MP4 for YouTube) ───────
-    const { codec: videoCodecStr, hardwareAcceleration: videoHW } = await resolveH264Codec(width, height);
+    // ── 4. Set up video encoder config ────────────────────────────────────────
+    // H.264 if AAC available (MP4 path), VP9 otherwise (WebM path)
+    let videoCodecStr: string;
+    let videoHW: HardwareAcceleration;
+    if (useAAC) {
+        const resolved = await resolveH264Codec(width, height);
+        videoCodecStr = resolved.codec;
+        videoHW = resolved.hardwareAcceleration;
+    } else {
+        videoCodecStr = 'vp09.00.10.08';
+        videoHW = 'prefer-software';
+    }
 
     const videoEncoderConfig: VideoEncoderConfig = {
         codec: videoCodecStr,
@@ -350,18 +366,11 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         latencyMode: 'quality',
     };
 
-    // ── 5. Set up MP4 muxer — stream directly to disk to avoid OOM on long videos
-    //
-    // For anything over ~5 min, accumulating the whole MP4 in an ArrayBuffer
-    // will exhaust available heap (30 min @ 30 Mbps ≈ 6.75 GB).  Instead we:
-    //   a) Ask the user to pick a save location (File System Access API)
-    //   b) Open a WritableFileStream
-    //   c) Pass it to mp4-muxer's FileSystemWritableFileStreamTarget so each
-    //      encoded chunk is written to disk immediately — peak RAM stays <50 MB.
-    //
-    // Fallback: if File System Access API is unavailable (Firefox, cross-origin
-    // iframe, etc.) we revert to the original ArrayBuffer path with a warning.
-
+    // ── 5. Set up muxer ───────────────────────────────────────────────────────
+    // Primary:  AAC + H.264 → MP4 streamed to disk via File System Access API
+    //           (safe for any length — peak RAM stays <50 MB)
+    // Fallback A: AAC + H.264 → MP4 in-memory (File System API unavailable)
+    // Fallback B: Opus + VP9 → WebM in-memory (AAC not supported in browser)
     type AddVideo = (c: EncodedVideoChunk, m: EncodedVideoChunkMetadata) => void;
     type AddAudio = (c: EncodedAudioChunk, m: EncodedAudioChunkMetadata) => void;
 
@@ -369,14 +378,11 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     let addAudioChunk!: AddAudio;
     let finalizeMuxer!: () => Promise<void>;
 
-    const { Muxer: Mp4Muxer,
-        FileSystemWritableFileStreamTarget,
-        ArrayBufferTarget: Mp4ArrayTarget } = await import('mp4-muxer');
+    const suggestedName = `sonic-visualizer-${width}x${height}.${useAAC ? 'mp4' : 'webm'}`;
 
-    const suggestedName = `sonic-visualizer-${width}x${height}.mp4`;
-
-    if (typeof (window as any).showSaveFilePicker === 'function') {
-        // ── Streaming path (safe for any length) ──────────────────────────
+    if (useAAC && typeof (window as any).showSaveFilePicker === 'function') {
+        // ── Streaming to disk (best — safe for any length) ────────────────────
+        const { Muxer: Mp4Muxer, FileSystemWritableFileStreamTarget } = await import('mp4-muxer');
         let fileHandle: FileSystemFileHandle;
         try {
             fileHandle = await (window as any).showSaveFilePicker({
@@ -384,32 +390,25 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
                 types: [{ description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } }],
             });
         } catch {
-            // User cancelled the save dialog — abort cleanly
             throw new DOMException('Export cancelled', 'AbortError');
         }
-
-        const writableStream: FileSystemWritableFileStream =
-            await fileHandle.createWritable();
-
+        const writableStream: FileSystemWritableFileStream = await fileHandle.createWritable();
         const mp4Target = new FileSystemWritableFileStreamTarget(writableStream);
         const mp4 = new Mp4Muxer({
             target: mp4Target,
             video: { codec: 'avc', width, height, frameRate: FPS },
             audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
             firstTimestampBehavior: 'offset',
-            // fastStart: false → moov atom written at the end of file.
-            // Works perfectly for YouTube uploads & local playback. Keeps RAM low.
-            fastStart: false,
+            fastStart: false,   // moov at end — fine for YouTube & local playback
         });
         addVideoChunk = (c, m) => mp4.addVideoChunk(c, m);
         addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
-        finalizeMuxer = async () => {
-            mp4.finalize();
-            await writableStream.close();
-        };
-    } else {
-        // ── Fallback: in-memory (short videos only, shows warning) ────────
-        console.warn('File System Access API not available — falling back to in-memory muxing. Very long videos may crash.');
+        finalizeMuxer = async () => { mp4.finalize(); await writableStream.close(); };
+
+    } else if (useAAC) {
+        // ── In-memory MP4 fallback (File System API unavailable) ──────────────
+        console.warn('File System Access API not available — using in-memory MP4. Very long videos may crash.');
+        const { Muxer: Mp4Muxer, ArrayBufferTarget: Mp4ArrayTarget } = await import('mp4-muxer');
         const mp4Target = new Mp4ArrayTarget();
         const mp4 = new Mp4Muxer({
             target: mp4Target,
@@ -422,15 +421,36 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
         finalizeMuxer = async () => {
             mp4.finalize();
-            const outputBuffer = (mp4Target as any).buffer as ArrayBuffer;
-            const blob = new Blob([outputBuffer], { type: 'video/mp4' });
+            const buf = (mp4Target as any).buffer as ArrayBuffer;
+            const blob = new Blob([buf], { type: 'video/mp4' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = suggestedName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            a.href = url; a.download = suggestedName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 3000);
+        };
+
+    } else {
+        // ── Opus + WebM fallback (AAC not supported in this browser) ──────────
+        console.warn('AAC not supported — falling back to Opus + WebM.');
+        const { Muxer: WebmMuxer, ArrayBufferTarget: WebmArrayTarget } = await import('webm-muxer');
+        const webmTarget = new WebmArrayTarget();
+        const webm = new WebmMuxer({
+            target: webmTarget,
+            video: { codec: 'V_VP9', width, height, frameRate: FPS },
+            audio: { codec: 'A_OPUS', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+            firstTimestampBehavior: 'offset',
+        });
+        addVideoChunk = (c, m) => webm.addVideoChunk(c, m);
+        addAudioChunk = (c, m) => webm.addAudioChunk(c, m);
+        finalizeMuxer = async () => {
+            webm.finalize();
+            const buf = (webmTarget as any).buffer as ArrayBuffer;
+            const blob = new Blob([buf], { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = suggestedName;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 3000);
         };
     }
@@ -443,18 +463,17 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     });
     videoEncoder.configure(videoEncoderConfig);
 
-    // ── 7. Audio encoder (AAC 320 kbps) + feed all audio chunks now ──────────
+    // ── 7. Audio encoder + feed all audio chunks ──────────────────────────────
     let audioError: Error | null = null;
     const audioEncoder = new AudioEncoder({
         output: (chunk, meta) => addAudioChunk(chunk, meta!),
         error: (e) => { audioError = e; },
     });
-    audioEncoder.configure({
-        codec: 'aac',
-        sampleRate: encBuf.sampleRate,
-        numberOfChannels: numChannels,
-        bitrate: 320_000,
-    });
+    audioEncoder.configure(
+        useAAC
+            ? { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels, bitrate: aacBitrate }
+            : { codec: 'opus', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels, bitrate: 256_000 },
+    );
 
     const AUDIO_CHUNK = encBuf.sampleRate; // 1 sec per chunk
     for (let c = 0; c * AUDIO_CHUNK < encBuf.length; c++) {
@@ -516,8 +535,7 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
 
         renderExportFrame(ctx, width, height, dataArray, settings, state, bgImg, centerImg, logoImg);
 
-        // Copy pixels into our pre-allocated buffer so the VideoFrame constructor
-        // never has to allocate its own ArrayBuffer (which fails at high res).
+        // Copy pixels into pre-allocated buffer so VideoFrame never allocates its own
         const imageData = ctx.getImageData(0, 0, width, height);
         pixelView.set(imageData.data);
 
@@ -547,15 +565,14 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         return;
     }
 
-    // ── 10. Flush encoders (concurrent) ──────────────────────────────────────
+    // ── 10. Flush encoders ────────────────────────────────────────────────────
     await Promise.all([videoEncoder.flush(), audioEncoder.flush()]);
     if (videoError) throw videoError;
     if (audioError) throw audioError;
     videoEncoder.close();
     audioEncoder.close();
 
-    // ── 11. Finalize muxer & save (streaming path writes to disk, fallback
-    //        path triggers a browser download of the in-memory buffer)
+    // ── 11. Finalize & save ───────────────────────────────────────────────────
     await finalizeMuxer();
 
     onProgress(100, 0);

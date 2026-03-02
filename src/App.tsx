@@ -63,6 +63,7 @@ export default function App() {
 
   const exportAbortRef = useRef<AbortController | null>(null);
   const isExportingRef = useRef(false);
+  const wasPlayingRef = useRef(false);  // remember playback state so we can resume after export
 
   // ── Visualizer settings ──────────────────────────────────────────────────
   const [settings, setSettings] = useState<VisualizerSettings>({
@@ -104,6 +105,8 @@ export default function App() {
   const centerImgRef = useRef<HTMLImageElement | null>(null);
   const logoImgRef = useRef<HTMLImageElement | null>(null);
   const bgImgRef = useRef<HTMLImageElement | null>(null);
+  // Callback ref so we can restart the rAF loop after export finishes
+  const renderFrameRef = useRef<((ts: number) => void) | null>(null);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
 
@@ -121,10 +124,34 @@ export default function App() {
     setExportProgress(0);
     setExportSpeed(0);
 
+    // ── Stop everything to give the encoder full CPU/GPU/memory ──────────────
+    // 1. Pause audio playback
+    wasPlayingRef.current = isPlaying;
+    if (audioRef.current && isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
+    // 2. Suspend Web Audio graph (stops analyser, frees audio thread CPU)
+    if (audioContextRef.current && audioContextRef.current.state === 'running') {
+      audioContextRef.current.suspend();
+    }
+    // 3. Stop the canvas animation loop
+    cancelAnimationFrame(animationRef.current);
+    animationRef.current = 0;
+
     let [w, h] = resolutionMap[recordingQuality];
     if (aspectRatio === '9:16') [w, h] = [h, w];
 
     const engineFn = exportEngine === 'webcodecs' ? exportWithWebCodecs : exportWithFFmpeg;
+
+    const resumeApp = () => {
+      // Restart the canvas animation loop using stored renderFrame reference
+      if (animationRef.current === 0 && renderFrameRef.current) {
+        animationRef.current = requestAnimationFrame(renderFrameRef.current);
+      }
+      // Resume Web Audio so analyser works again
+      audioContextRef.current?.resume();
+    };
 
     try {
       await engineFn({
@@ -137,14 +164,17 @@ export default function App() {
       setIsExporting(false);
       isExportingRef.current = false;
       exportAbortRef.current = null;
+      resumeApp();
     } catch (err: any) {
       if (!abortController.signal.aborted) {
         setExportError(err?.message || String(err));
         console.error('[Export Error]', err);
+        resumeApp();
       } else {
         setIsExporting(false);
         isExportingRef.current = false;
         exportAbortRef.current = null;
+        resumeApp();
       }
     }
   };
@@ -154,6 +184,7 @@ export default function App() {
     setIsExporting(false);
     isExportingRef.current = false;
     setExportError(null);
+    // resumeApp() is called inside the catch block above when abort fires
   };
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
@@ -421,6 +452,7 @@ export default function App() {
       ctx.restore();
     };
 
+    renderFrameRef.current = renderFrame;
     renderFrame(0);
   }, []);
 
