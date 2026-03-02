@@ -272,7 +272,9 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     const FPS = 60;
     const FFT_SIZE = 2048;
     const GOP = FPS * 2;
-    const PIPELINE_DEPTH = 12;
+    // Scale pipeline depth down for high resolutions to reduce peak memory pressure
+    const px = width * height;
+    const PIPELINE_DEPTH = px >= 3840 * 2160 ? 3 : px >= 2560 * 1440 ? 6 : 12;
 
     // ── 1. Decode audio ───────────────────────────────────────────────────────
     const arrayBuffer = await audioFile.arrayBuffer();
@@ -446,7 +448,13 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d', { willReadFrequently: false, desynchronized: true })!;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true, desynchronized: false })!;
+
+    // Pre-allocate a reusable RGBA pixel buffer to avoid per-frame browser
+    // allocation failures ("Array buffer allocation failed") at 2K/4K.
+    const rgbaByteLength = width * height * 4;
+    const pixelBuffer = new ArrayBuffer(rgbaByteLength);
+    const pixelView = new Uint8ClampedArray(pixelBuffer);
 
     const state: RenderState = {
         rotation: 0,
@@ -473,8 +481,19 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
 
         renderExportFrame(ctx, width, height, dataArray, settings, state, bgImg, centerImg, logoImg);
 
+        // Copy pixels into our pre-allocated buffer so the VideoFrame constructor
+        // never has to allocate its own ArrayBuffer (which fails at high res).
+        const imageData = ctx.getImageData(0, 0, width, height);
+        pixelView.set(imageData.data);
+
         const tsUs = Math.round((fi / FPS) * 1_000_000);
-        const frame = new VideoFrame(canvas, { timestamp: tsUs, duration: Math.round(1_000_000 / FPS) });
+        const frame = new VideoFrame(pixelBuffer, {
+            format: 'RGBA',
+            codedWidth: width,
+            codedHeight: height,
+            timestamp: tsUs,
+            duration: Math.round(1_000_000 / FPS),
+        });
         videoEncoder.encode(frame, { keyFrame: fi % GOP === 0 });
         frame.close();
 
