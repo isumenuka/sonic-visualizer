@@ -20,14 +20,27 @@ export default defineConfig(({ mode }) => {
         }
       }
     ],
+
+    // Treat .wasm files as static assets so Vite bundles them with a
+    // content-hashed URL — required for @ffmpeg/core to work on Vercel.
+    assetsInclude: ['**/*.wasm'],
+
+    // Don't pre-bundle ffmpeg packages; they rely on SharedArrayBuffer workers
+    // and must be loaded as native ES modules by the browser.
+    optimizeDeps: {
+      exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util', '@ffmpeg/core'],
+    },
+
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
+
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
     },
+
     server: {
       headers: {
         'Cross-Origin-Opener-Policy': 'same-origin',

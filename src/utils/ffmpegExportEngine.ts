@@ -1,5 +1,5 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-// @ts-ignore: Vite ?url import is not recognized by standard TS setup
+// @ts-ignore
 import workerURL from '@ffmpeg/ffmpeg/worker?url';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import {
@@ -231,10 +231,10 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
     const FFT_SIZE = 2048;
 
     // ── 1. Create and Load FFmpeg ─────────────────────────────────────────────
-    onProgress(0, 0); // "Initializing FFmpeg (WebAssembly Engine)..."
+    // Core files are served from public/ffmpeg/ — no CDN, works on Vercel & locally.
+    // Files: public/ffmpeg/ffmpeg-core.js + ffmpeg-core.wasm (copied from node_modules).
+    onProgress(0, 0);
 
-    // In React/Vite, we can access the core by letting @ffmpeg/ffmpeg fetch from unpkg
-    // or passing the URLs explicitly. For multithreading (SharedArrayBuffer) we use core-mt.
     const ffmpeg = new FFmpeg();
 
     ffmpeg.on('log', ({ message }) => {
@@ -242,13 +242,12 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
     });
 
     let transcodeProgress = 0;
-    ffmpeg.on('progress', ({ progress, time }) => {
-        transcodeProgress = progress; // 0 to 1
-        // Map 50-100% block strictly to transcode progress.
-        onProgress(50 + (transcodeProgress * 50), 0);
+    ffmpeg.on('progress', ({ progress }) => {
+        transcodeProgress = progress;
+        onProgress(50 + transcodeProgress * 50, 0);
     });
 
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+    const baseURL = `${window.location.origin}/ffmpeg`;
     await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
