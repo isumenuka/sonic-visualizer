@@ -350,24 +350,90 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         latencyMode: 'quality',
     };
 
-    // ── 5. Set up MP4 muxer (H.264 + AAC) ────────────────────────────────────
+    // ── 5. Set up MP4 muxer — stream directly to disk to avoid OOM on long videos
+    //
+    // For anything over ~5 min, accumulating the whole MP4 in an ArrayBuffer
+    // will exhaust available heap (30 min @ 30 Mbps ≈ 6.75 GB).  Instead we:
+    //   a) Ask the user to pick a save location (File System Access API)
+    //   b) Open a WritableFileStream
+    //   c) Pass it to mp4-muxer's FileSystemWritableFileStreamTarget so each
+    //      encoded chunk is written to disk immediately — peak RAM stays <50 MB.
+    //
+    // Fallback: if File System Access API is unavailable (Firefox, cross-origin
+    // iframe, etc.) we revert to the original ArrayBuffer path with a warning.
+
     type AddVideo = (c: EncodedVideoChunk, m: EncodedVideoChunkMetadata) => void;
     type AddAudio = (c: EncodedAudioChunk, m: EncodedAudioChunkMetadata) => void;
 
-    const { Muxer: Mp4Muxer, ArrayBufferTarget: Mp4Target } = await import('mp4-muxer');
-    const mp4Target = new Mp4Target();
-    const mp4 = new Mp4Muxer({
-        target: mp4Target,
-        video: { codec: 'avc', width, height, frameRate: FPS },
-        audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
-        firstTimestampBehavior: 'offset',
-        fastStart: 'in-memory',
-    });
-    const addVideoChunk: AddVideo = (c, m) => mp4.addVideoChunk(c, m);
-    const addAudioChunk: AddAudio = (c, m) => mp4.addAudioChunk(c, m);
-    const finalizeMuxer = () => { mp4.finalize(); return (mp4Target as any).buffer as ArrayBuffer; };
-    const outputMimeType = 'video/mp4';
-    const outputExt = 'mp4';
+    let addVideoChunk!: AddVideo;
+    let addAudioChunk!: AddAudio;
+    let finalizeMuxer!: () => Promise<void>;
+
+    const { Muxer: Mp4Muxer,
+        FileSystemWritableFileStreamTarget,
+        ArrayBufferTarget: Mp4ArrayTarget } = await import('mp4-muxer');
+
+    const suggestedName = `sonic-visualizer-${width}x${height}.mp4`;
+
+    if (typeof (window as any).showSaveFilePicker === 'function') {
+        // ── Streaming path (safe for any length) ──────────────────────────
+        let fileHandle: FileSystemFileHandle;
+        try {
+            fileHandle = await (window as any).showSaveFilePicker({
+                suggestedName,
+                types: [{ description: 'MP4 Video', accept: { 'video/mp4': ['.mp4'] } }],
+            });
+        } catch {
+            // User cancelled the save dialog — abort cleanly
+            throw new DOMException('Export cancelled', 'AbortError');
+        }
+
+        const writableStream: FileSystemWritableFileStream =
+            await fileHandle.createWritable();
+
+        const mp4Target = new FileSystemWritableFileStreamTarget(writableStream);
+        const mp4 = new Mp4Muxer({
+            target: mp4Target,
+            video: { codec: 'avc', width, height, frameRate: FPS },
+            audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+            firstTimestampBehavior: 'offset',
+            // fastStart: false → moov atom written at the end of file.
+            // Works perfectly for YouTube uploads & local playback. Keeps RAM low.
+            fastStart: false,
+        });
+        addVideoChunk = (c, m) => mp4.addVideoChunk(c, m);
+        addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
+        finalizeMuxer = async () => {
+            mp4.finalize();
+            await writableStream.close();
+        };
+    } else {
+        // ── Fallback: in-memory (short videos only, shows warning) ────────
+        console.warn('File System Access API not available — falling back to in-memory muxing. Very long videos may crash.');
+        const mp4Target = new Mp4ArrayTarget();
+        const mp4 = new Mp4Muxer({
+            target: mp4Target,
+            video: { codec: 'avc', width, height, frameRate: FPS },
+            audio: { codec: 'aac', sampleRate: encBuf.sampleRate, numberOfChannels: numChannels },
+            firstTimestampBehavior: 'offset',
+            fastStart: 'in-memory',
+        });
+        addVideoChunk = (c, m) => mp4.addVideoChunk(c, m);
+        addAudioChunk = (c, m) => mp4.addAudioChunk(c, m);
+        finalizeMuxer = async () => {
+            mp4.finalize();
+            const outputBuffer = (mp4Target as any).buffer as ArrayBuffer;
+            const blob = new Blob([outputBuffer], { type: 'video/mp4' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = suggestedName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 3000);
+        };
+    }
 
     // ── 6. Video encoder ──────────────────────────────────────────────────────
     let videoError: Error | null = null;
@@ -488,18 +554,9 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     videoEncoder.close();
     audioEncoder.close();
 
-    const outputBuffer = finalizeMuxer();
-
-    // ── 11. Download ──────────────────────────────────────────────────────────
-    const blob = new Blob([outputBuffer], { type: outputMimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `sonic-visualizer-${width}x${height}.${outputExt}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    // ── 11. Finalize muxer & save (streaming path writes to disk, fallback
+    //        path triggers a browser download of the in-memory buffer)
+    await finalizeMuxer();
 
     onProgress(100, 0);
 }
