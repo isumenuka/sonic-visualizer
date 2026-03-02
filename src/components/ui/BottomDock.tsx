@@ -1,5 +1,6 @@
 import React from 'react';
-import { Play, Pause, Music, Image as ImageIcon, User, Settings, Download } from 'lucide-react';
+import { Play, Pause, Music, Image as ImageIcon, User, Settings, Download, Cpu, Zap } from 'lucide-react';
+import { ExportEngine } from '../../App';
 
 export interface BottomDockProps {
     audioFile: File | null;
@@ -9,20 +10,24 @@ export interface BottomDockProps {
     showControls: boolean;
     isExporting: boolean;
     recordingQuality: '1080p' | '2k' | '4k';
+    exportEngine: ExportEngine;
     togglePlay: () => void;
     onAudioUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onBgUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onCenterImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onToggleSettings: () => void;
     onQualityChange: (quality: '1080p' | '2k' | '4k') => void;
+    onEngineChange: (engine: ExportEngine) => void;
     onExport: () => void;
 }
 
 export function BottomDock({
     audioFile, bgFile, centerImage, isPlaying, showControls, isExporting,
-    recordingQuality, togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
-    onToggleSettings, onQualityChange, onExport
+    recordingQuality, exportEngine, togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
+    onToggleSettings, onQualityChange, onEngineChange, onExport
 }: BottomDockProps) {
+    const webCodecsAvailable = typeof VideoEncoder !== 'undefined';
+
     return (
         <div className="flex items-center justify-center w-full"
             style={{ maxWidth: 'calc(100vw - 16px)' }}>
@@ -88,6 +93,29 @@ export function BottomDock({
                 </button>
 
                 <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
+
+                {/* ── Export Engine Toggle (GPU ↔ CPU) ── */}
+                <button
+                    onClick={() => onEngineChange(exportEngine === 'webcodecs' ? 'ffmpeg' : 'webcodecs')}
+                    disabled={isExporting}
+                    title={exportEngine === 'webcodecs'
+                        ? 'GPU (WebCodecs) — click to switch to FFmpeg CPU'
+                        : 'FFmpeg CPU — click to switch to GPU (WebCodecs)'}
+                    className={`p-2 sm:p-2.5 rounded-full transition-colors relative group shrink-0 ${isExporting ? 'cursor-not-allowed opacity-50' :
+                            exportEngine === 'webcodecs'
+                                ? 'text-emerald-400 hover:bg-emerald-400/10'
+                                : 'text-amber-400 hover:bg-amber-400/10'
+                        }`}
+                >
+                    {exportEngine === 'webcodecs'
+                        ? <Zap className="w-4 h-4 sm:w-5 sm:h-5" />
+                        : <Cpu className="w-4 h-4 sm:w-5 sm:h-5" />}
+                    <span className="absolute -top-9 left-1/2 -translate-x-1/2 hidden sm:block bg-black/80 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none">
+                        {exportEngine === 'webcodecs'
+                            ? (webCodecsAvailable ? 'GPU Export (fast)' : 'GPU N/A')
+                            : 'CPU Export (FFmpeg)'}
+                    </span>
+                </button>
 
                 {/* ── Quality selector ── */}
                 <div className="flex items-center gap-0.5 bg-white/5 rounded-full px-1 py-1 border border-white/10 shrink-0">

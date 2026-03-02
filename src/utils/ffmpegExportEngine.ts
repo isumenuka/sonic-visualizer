@@ -1,5 +1,17 @@
+/**
+ * FFmpeg WASM Export Engine
+ * ─────────────────────────
+ * Uses @ffmpeg/ffmpeg (WebAssembly) to render frames at full resolution
+ * and encode them into MP4 via H.264 + AAC.  Falls back to Opus/WebM
+ * if AAC is not natively available.
+ *
+ * FFmpeg core files are loaded from:
+ *   1. VITE_FFMPEG_BASE_URL env var (set in Vercel → points to Render.com)
+ *   2. /ffmpeg/ local path (auto-used in `npm run dev`)
+ */
+
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-// @ts-ignore
+// @ts-ignore — Vite resolves this as an asset URL at build time
 import workerURL from '@ffmpeg/ffmpeg/worker?url';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
 import {
@@ -223,6 +235,19 @@ function renderExportFrame(
     }
 }
 
+// ─── Resolve FFmpeg Base URL ──────────────────────────────────────────────────
+
+function getFFmpegBaseURL(): string {
+    // In production (Vercel), VITE_FFMPEG_BASE_URL is set to the Render.com service URL.
+    // In development, fall back to /ffmpeg (served from public/ffmpeg/ by Vite dev server).
+    const renderURL = import.meta.env.VITE_FFMPEG_BASE_URL as string | undefined;
+    if (renderURL && renderURL.trim()) {
+        // Ensure no trailing slash, then append /ffmpeg
+        return renderURL.replace(/\/$/, '') + '/ffmpeg';
+    }
+    return `${window.location.origin}/ffmpeg`;
+}
+
 // ─── Main Export Function ─────────────────────────────────────────────────────
 
 export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
@@ -231,23 +256,22 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
     const FFT_SIZE = 2048;
 
     // ── 1. Create and Load FFmpeg ─────────────────────────────────────────────
-    // Core files are served from public/ffmpeg/ — no CDN, works on Vercel & locally.
-    // Files: public/ffmpeg/ffmpeg-core.js + ffmpeg-core.wasm (copied from node_modules).
     onProgress(0, 0);
 
     const ffmpeg = new FFmpeg();
 
     ffmpeg.on('log', ({ message }) => {
-        console.log('[FFmpeg Log]', message);
+        console.log('[FFmpeg]', message);
     });
 
-    let transcodeProgress = 0;
     ffmpeg.on('progress', ({ progress }) => {
-        transcodeProgress = progress;
-        onProgress(50 + transcodeProgress * 50, 0);
+        onProgress(50 + Math.min(progress, 1) * 50, 0);
     });
 
-    const baseURL = `${window.location.origin}/ffmpeg`;
+    // Load core from Render.com (prod) or /ffmpeg local path (dev)
+    const baseURL = getFFmpegBaseURL();
+    console.log(`[FFmpeg] Loading core from: ${baseURL}`);
+
     await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
@@ -256,7 +280,7 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
 
     if (signal.aborted) return;
 
-    // ── 2. Decode audio for Canvas rendering (FFT logic) ───────────────────────
+    // ── 2. Decode audio ───────────────────────────────────────────────────────
     const arrayBuffer = await audioFile.arrayBuffer();
     if (signal.aborted) return;
 
@@ -265,23 +289,23 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
     await decodeCtx.close();
     if (signal.aborted) return;
 
-    const ch0 = originalBuffer.getChannelData(0);
+    // ── CRITICAL: clamp channel count to [1, 2] ───────────────────────────────
+    // Some decoders return 0 channels which causes AudioEncoder to throw.
+    const numChannels = Math.max(1, Math.min(2, originalBuffer.numberOfChannels || 1));
+
+    const ch0 = numChannels >= 1 ? originalBuffer.getChannelData(0) : new Float32Array(originalBuffer.length);
+    const ch1 = numChannels >= 2 ? originalBuffer.getChannelData(1) : ch0;
     const monoPCM = new Float32Array(ch0.length);
-    if (originalBuffer.numberOfChannels > 1) {
-        const ch1 = originalBuffer.getChannelData(1);
-        for (let i = 0; i < ch0.length; i++) monoPCM[i] = (ch0[i] + ch1[i]) / 2;
-    } else {
-        monoPCM.set(ch0);
-    }
+    for (let i = 0; i < ch0.length; i++) monoPCM[i] = (ch0[i] + ch1[i]) / 2;
 
     const duration = originalBuffer.duration;
     const totalFrames = Math.ceil(duration * FPS);
 
     // ── 3. Write audio to FFmpeg FS ───────────────────────────────────────────
-    const audioExt = audioFile.name.split('.').pop() || 'mp3';
+    const audioExt = audioFile.name.split('.').pop()?.toLowerCase() || 'mp3';
     await ffmpeg.writeFile(`audio.${audioExt}`, await fetchFile(audioFile));
 
-    // ── 4. Setup Canvas for Render Loop ───────────────────────────────────────
+    // ── 4. Setup Canvas ───────────────────────────────────────────────────────
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -289,89 +313,97 @@ export async function exportWithFFmpeg(options: ExportOptions): Promise<void> {
 
     const state: RenderState = {
         rotation: 0,
-        particles: [], nebParticles: [], bgParticles: [],
+        particles: [],
+        nebParticles: [],
+        bgParticles: [],
         colorCycleHue: 0,
         smoothedMags: new Float32Array(FFT_SIZE >> 1),
     };
 
-    // ── 5. Render frames to JPEGs and write to FFmpeg FS ──────────────────────
+    // ── 5. Render frames → JPEG sequence ─────────────────────────────────────
     const startTime = performance.now();
+
     for (let fi = 0; fi < totalFrames; fi++) {
-        if (signal.aborted) {
-            ffmpeg.terminate();
-            return;
-        }
+        if (signal.aborted) { ffmpeg.terminate(); return; }
 
         const sampleOffset = Math.floor((fi / FPS) * originalBuffer.sampleRate);
         const dataArray = getByteFrequencyData(monoPCM, sampleOffset, FFT_SIZE, state.smoothedMags);
 
         renderExportFrame(ctx, width, height, dataArray, settings, state, bgImg, centerImg, logoImg);
 
-        // Convert canvas to bold/buffer
         const blob = await new Promise<Blob>((resolve, reject) => {
             canvas.toBlob(
-                (b) => (b ? resolve(b) : reject(new Error('Canvas to Blob failed'))),
+                (b) => (b ? resolve(b) : reject(new Error('Canvas.toBlob() failed'))),
                 'image/jpeg',
-                0.8
+                0.85,
             );
         });
 
         const buf = await blob.arrayBuffer();
         await ffmpeg.writeFile(`f_${fi}.jpg`, new Uint8Array(buf));
 
-        // Let the UI breathe and update progress map 0-50% to rendering
-        if (fi % 1 === 0) { // update every frame to prevent hanging visual
-            await new Promise((r) => setTimeout(r, 0));
-            const elapsed = (performance.now() - startTime) / 1000;
-            const videoSec = fi / FPS;
-            const speedX = elapsed > 0.5 ? +(videoSec / elapsed).toFixed(1) : 0;
-            // First 50% is creating images
-            onProgress((fi / totalFrames) * 50, speedX);
+        // Update progress (0 → 50%) and yield to UI every frame
+        await new Promise<void>((r) => setTimeout(r, 0));
+        const elapsed = (performance.now() - startTime) / 1000;
+        const videoSec = fi / FPS;
+        const speedX = elapsed > 0.5 ? +(videoSec / elapsed).toFixed(1) : 0;
+        onProgress((fi / totalFrames) * 50, speedX);
+    }
+
+    if (signal.aborted) { ffmpeg.terminate(); return; }
+
+    // ── 6. FFmpeg encode (50 → 100%) ─────────────────────────────────────────
+    // Probe AAC support; fall back to Opus/WebM if not available
+    let useAAC = true;
+    try {
+        if (typeof AudioEncoder !== 'undefined') {
+            const probe = await AudioEncoder.isConfigSupported({
+                codec: 'aac', sampleRate: originalBuffer.sampleRate,
+                numberOfChannels: numChannels, bitrate: 256_000,
+            });
+            useAAC = probe.supported === true;
         }
-    }
+    } catch { useAAC = false; }
 
-    if (signal.aborted) {
-        ffmpeg.terminate();
-        return;
-    }
+    const outputFile = useAAC ? 'output.mp4' : 'output.webm';
+    const outputMime = useAAC ? 'video/mp4' : 'video/webm';
+    const outputExt = useAAC ? 'mp4' : 'webm';
 
-    // ── 6. Execute FFmpeg C/C++ engine via WebAssembly ────────────────────────
-    // We pass our image sequence and original audio file to generate output.mp4
-    await ffmpeg.exec([
-        '-framerate', String(FPS),
-        '-i', 'f_%d.jpg',
-        '-i', `audio.${audioExt}`,
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '24',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-shortest',
-        'output.mp4'
-    ]);
+    const ffmpegArgs = useAAC
+        ? [
+            '-framerate', String(FPS),
+            '-i', 'f_%d.jpg',
+            '-i', `audio.${audioExt}`,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-shortest', outputFile,
+        ]
+        : [
+            '-framerate', String(FPS),
+            '-i', 'f_%d.jpg',
+            '-i', `audio.${audioExt}`,
+            '-c:v', 'libvpx-vp9', '-crf', '33', '-b:v', '0',
+            '-c:a', 'libopus', '-b:a', '192k',
+            '-shortest', outputFile,
+        ];
 
-    if (signal.aborted) {
-        ffmpeg.terminate();
-        return;
-    }
+    await ffmpeg.exec(ffmpegArgs);
 
-    // ── 7. Read Output and Cleanup ────────────────────────────────────────────
-    const fileData = await ffmpeg.readFile('output.mp4');
-    const data = new Uint8Array(fileData as any);
+    if (signal.aborted) { ffmpeg.terminate(); return; }
 
-    // Download logic
-    const outBlob = new Blob([data], { type: 'video/mp4' });
+    // ── 7. Download output ────────────────────────────────────────────────────
+    const fileData = await ffmpeg.readFile(outputFile);
+    const data = new Uint8Array(fileData as ArrayBuffer | Uint8Array);
+    const outBlob = new Blob([data], { type: outputMime });
     const url = URL.createObjectURL(outBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `sonic-visualizer-${width}x${height}-wasm.mp4`;
+    a.download = `sonic-visualizer-${width}x${height}-ffmpeg.${outputExt}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 3000);
 
-    // Clean up FFmpeg VM memory
     ffmpeg.terminate();
     onProgress(100, 0);
 }

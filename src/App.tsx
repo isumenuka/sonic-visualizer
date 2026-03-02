@@ -1,6 +1,12 @@
 /**
  * Sonic Visualizer
  * Tech: C/C++ → WebAssembly (FFmpeg), TypeScript, HTML/CSS
+ *
+ * Deployment: GitHub → Vercel (frontend) + Render.com (FFmpeg WASM server)
+ *
+ * Export engines:
+ *   - WebCodecs (primary): GPU-accelerated, fast, outputs MP4/WebM natively
+ *   - FFmpeg WASM (fallback): CPU-based, universally compatible, uses Render.com CDN
  */
 
 import React, { useRef, useEffect, useState } from 'react';
@@ -14,6 +20,7 @@ import {
   drawNebula, drawAura, drawPeaks
 } from './visualizers/drawings';
 import { exportWithFFmpeg } from './utils/ffmpegExportEngine';
+import { exportWithWebCodecs } from './utils/exportEngine';
 
 import { CropModal } from './components/ui/CropModal';
 import { BottomDock } from './components/ui/BottomDock';
@@ -21,6 +28,7 @@ import { SettingsPanel } from './components/ui/SettingsPanel';
 import { ExportModal } from './components/ui/ExportModal';
 
 type AspectRatio = '16:9' | '9:16';
+export type ExportEngine = 'webcodecs' | 'ffmpeg';
 
 export default function App() {
   // ── Media state ──────────────────────────────────────────────────────────
@@ -46,6 +54,13 @@ export default function App() {
   const [exportProgress, setExportProgress] = useState(0);
   const [exportSpeed, setExportSpeed] = useState(0);
   const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
+
+  // Dual export engine: WebCodecs (GPU) is primary; FFmpeg WASM is the fallback.
+  const [exportEngine, setExportEngine] = useState<ExportEngine>(() => {
+    // If WebCodecs VideoEncoder is unavailable (old browser), default to FFmpeg.
+    return typeof VideoEncoder !== 'undefined' ? 'webcodecs' : 'ffmpeg';
+  });
+
   const exportAbortRef = useRef<AbortController | null>(null);
   const isExportingRef = useRef(false);
 
@@ -109,8 +124,10 @@ export default function App() {
     let [w, h] = resolutionMap[recordingQuality];
     if (aspectRatio === '9:16') [w, h] = [h, w];
 
+    const engineFn = exportEngine === 'webcodecs' ? exportWithWebCodecs : exportWithFFmpeg;
+
     try {
-      await exportWithFFmpeg({
+      await engineFn({
         audioFile, width: w, height: h, quality: recordingQuality,
         settings: settingsRef.current,
         bgImg: bgImgRef.current, centerImg: centerImgRef.current, logoImg: logoImgRef.current,
@@ -407,7 +424,7 @@ export default function App() {
     renderFrame(0);
   }, []);
 
-  // ── Performance mode sync ─────────────────────────────────────────────────
+  // ── Performance mode sync ────────────────────────────────────────────────
   const handleTogglePerformance = () => {
     setPerformanceMode(p => {
       const next = !p;
@@ -434,8 +451,8 @@ export default function App() {
               key={r}
               onClick={() => setAspectRatio(r)}
               className={`px-3 py-1 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${aspectRatio === r
-                  ? 'bg-white text-black'
-                  : 'text-neutral-400 hover:text-white'
+                ? 'bg-white text-black'
+                : 'text-neutral-400 hover:text-white'
                 }`}
             >
               {r}
@@ -512,12 +529,14 @@ export default function App() {
           showControls={showControls}
           isExporting={isExporting}
           recordingQuality={recordingQuality}
+          exportEngine={exportEngine}
           togglePlay={togglePlay}
           onAudioUpload={handleAudioUpload}
           onBgUpload={handleBgUpload}
           onCenterImageUpload={handleCenterImageUpload}
           onToggleSettings={() => setShowControls(v => !v)}
           onQualityChange={setRecordingQuality}
+          onEngineChange={setExportEngine}
           onExport={exportVideo}
         />
       </div>
@@ -534,6 +553,7 @@ export default function App() {
         progress={exportProgress}
         speed={exportSpeed}
         error={exportError}
+        engine={exportEngine}
         onCancel={cancelExport}
       />
     </div>

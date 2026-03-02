@@ -1,17 +1,28 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { ExportEngine } from '../../App';
 
 export interface ExportModalProps {
     isOpen: boolean;
     progress: number;
     speed: number;
     error?: string | null;
+    engine: ExportEngine;
     onCancel: () => void;
 }
 
-export function ExportModal({ isOpen, progress, speed, error, onCancel }: ExportModalProps) {
+export function ExportModal({ isOpen, progress, speed, error, engine, onCancel }: ExportModalProps) {
     const speedLabel = speed > 0.5 ? `${speed.toFixed(1)}× realtime` : 'Initialising…';
     const isDone = progress >= 100;
+
+    const getStageLabel = () => {
+        if (engine === 'webcodecs') {
+            return 'GPU encoding frames…';
+        }
+        // FFmpeg two-phase: 0-50% = render frames, 50-100% = transcode
+        if (progress < 50) return `Rendering frames… ${Math.round(progress * 2)}%`;
+        return `FFmpeg transcoding… ${Math.round((progress - 50) * 2)}%`;
+    };
 
     return (
         <AnimatePresence>
@@ -51,7 +62,9 @@ export function ExportModal({ isOpen, progress, speed, error, onCancel }: Export
                                 </div>
                                 <div className="text-center">
                                     <h3 className="text-base font-bold text-white mb-1">Export Failed</h3>
-                                    <p className="text-xs text-neutral-400">FFmpeg encountered an error</p>
+                                    <p className="text-xs text-neutral-400">
+                                        {engine === 'webcodecs' ? 'WebCodecs encoder error' : 'FFmpeg encountered an error'}
+                                    </p>
                                 </div>
                                 <div className="w-full bg-rose-500/8 border border-rose-500/15 rounded-xl px-4 py-3
                                                 text-rose-300 text-xs text-center max-h-28 overflow-y-auto custom-scrollbar whitespace-pre-wrap">
@@ -93,8 +106,19 @@ export function ExportModal({ isOpen, progress, speed, error, onCancel }: Export
                                         {isDone ? 'Export Complete' : 'Rendering Video'}
                                     </h3>
                                     <p className="text-xs text-neutral-500 mt-0.5">
-                                        {isDone ? 'Your MP4 is downloading…' : speedLabel}
+                                        {isDone
+                                            ? `Your ${engine === 'webcodecs' ? 'MP4/WebM' : 'MP4'} is downloading…`
+                                            : speedLabel}
                                     </p>
+                                    {/* Engine badge */}
+                                    {!isDone && (
+                                        <span className={`inline-block mt-1.5 px-2 py-0.5 rounded-full text-[9px] font-semibold uppercase tracking-wider ${engine === 'webcodecs'
+                                                ? 'bg-emerald-400/15 text-emerald-400'
+                                                : 'bg-amber-400/15 text-amber-400'
+                                            }`}>
+                                            {engine === 'webcodecs' ? '⚡ GPU' : '🖥 FFmpeg'}
+                                        </span>
+                                    )}
                                 </div>
 
                                 {/* Progress bar */}
@@ -115,9 +139,7 @@ export function ExportModal({ isOpen, progress, speed, error, onCancel }: Export
 
                                 {!isDone && (
                                     <p className="text-[10px] text-neutral-600 text-center">
-                                        {progress < 50
-                                            ? `Rendering frames… ${Math.round(progress * 2)}%`
-                                            : `FFmpeg transcoding… ${Math.round((progress - 50) * 2)}%`}
+                                        {getStageLabel()}
                                     </p>
                                 )}
 

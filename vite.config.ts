@@ -10,6 +10,8 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       {
+        // Inject COOP + COEP headers during `vite dev` so SharedArrayBuffer
+        // (required by FFmpeg WASM threads) is available locally.
         name: 'configure-response-headers',
         configureServer: (server) => {
           server.middlewares.use((_req, res, next) => {
@@ -17,27 +19,45 @@ export default defineConfig(({ mode }) => {
             res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
             next();
           });
-        }
-      }
+        },
+      },
     ],
 
-    // Treat .wasm files as static assets so Vite bundles them with a
-    // content-hashed URL — required for @ffmpeg/core to work on Vercel.
+    // Treat .wasm as static assets — Vite gives them a hashed URL that Vercel caches.
     assetsInclude: ['**/*.wasm'],
 
-    // Don't pre-bundle ffmpeg packages; they rely on SharedArrayBuffer workers
-    // and must be loaded as native ES modules by the browser.
+    // Never pre-bundle FFmpeg — it uses SharedArrayBuffer workers that must
+    // be native ES modules loaded by the browser at runtime.
     optimizeDeps: {
       exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util', '@ffmpeg/core'],
     },
 
     define: {
+      // Expose the Render.com FFmpeg CDN URL to the client bundle.
+      // Set VITE_FFMPEG_BASE_URL in Vercel's Environment Variables dashboard
+      // to point at your Render.com Web Service (e.g. https://sonic-ffmpeg.onrender.com).
+      'import.meta.env.VITE_FFMPEG_BASE_URL': JSON.stringify(
+        env.VITE_FFMPEG_BASE_URL || ''
+      ),
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
     },
 
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+      },
+    },
+
+    build: {
+      rollupOptions: {
+        output: {
+          // Split large vendor chunks so Vercel Edge caches them separately.
+          manualChunks: {
+            react: ['react', 'react-dom'],
+            motion: ['motion'],
+            lucide: ['lucide-react'],
+          },
+        },
       },
     },
 
