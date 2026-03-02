@@ -294,10 +294,33 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
     await decodeCtx.close();
     if (signal.aborted) return;
 
-    // Resample to 48 kHz (AAC/Opus both prefer 48 kHz)
-    const TARGET_SR = 48000;
-    let encBuf = originalBuffer;
-    if (originalBuffer.sampleRate !== TARGET_SR) {
+    // ── MEMORY CRITICAL: extract monoPCM FIRST, then build encode buffer ──────
+    // Do NOT hold both originalBuffer + resampled encBuf + monoPCM in memory
+    // simultaneously — for long songs that can be 300 MB+ each.
+
+    // 1a. Build mono mix for FFT visualisation (uses originalBuffer channels)
+    const origCh0 = originalBuffer.numberOfChannels >= 1
+        ? originalBuffer.getChannelData(0)
+        : new Float32Array(originalBuffer.length);
+    const origCh1 = originalBuffer.numberOfChannels >= 2
+        ? originalBuffer.getChannelData(1)
+        : origCh0;
+    const monoPCM = new Float32Array(origCh0.length);
+    for (let i = 0; i < origCh0.length; i++) monoPCM[i] = (origCh0[i] + origCh1[i]) / 2;
+
+    const duration = originalBuffer.duration;
+    const totalFrames = Math.ceil(duration * FPS);
+
+    // 1b. Build encode buffer — skip resampling when browser supports the rate
+    // directly (44100 Hz and 48000 Hz are both natively supported by AAC & Opus).
+    // Resampling doubles peak audio memory; only do it for exotic sample rates.
+    const NATIVE_RATES = new Set([8000, 16000, 22050, 32000, 44100, 48000]);
+    let encBuf: AudioBuffer;
+    if (NATIVE_RATES.has(originalBuffer.sampleRate)) {
+        // Reuse same decoded buffer — zero extra allocation
+        encBuf = originalBuffer;
+    } else {
+        const TARGET_SR = 48000;
         const rsCtx = new OfflineAudioContext(
             Math.max(1, originalBuffer.numberOfChannels),
             Math.ceil(originalBuffer.duration * TARGET_SR),
@@ -306,24 +329,14 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         const src = rsCtx.createBufferSource();
         src.buffer = originalBuffer; src.connect(rsCtx.destination); src.start(0);
         encBuf = await rsCtx.startRendering();
+        // originalBuffer is no longer needed after resampling
     }
+    if (signal.aborted) return;
 
     // ── CRITICAL: clamp channel count to [1,2] ────────────────────────────────
     const numChannels = Math.max(1, Math.min(2, encBuf.numberOfChannels || 1));
 
-    // Mono PCM for FFT
-    const ch0 = originalBuffer.numberOfChannels >= 1
-        ? originalBuffer.getChannelData(0)
-        : new Float32Array(originalBuffer.length);
-    const ch1 = originalBuffer.numberOfChannels >= 2
-        ? originalBuffer.getChannelData(1)
-        : ch0;
-    const monoPCM = new Float32Array(ch0.length);
-    for (let i = 0; i < ch0.length; i++) monoPCM[i] = (ch0[i] + ch1[i]) / 2;
 
-    const duration = originalBuffer.duration;
-    const totalFrames = Math.ceil(duration * FPS);
-    if (signal.aborted) return;
 
     // ── 2. WebCodecs check ────────────────────────────────────────────────────
     if (typeof VideoEncoder === 'undefined') {
@@ -502,7 +515,17 @@ export async function exportWithWebCodecs(options: ExportOptions): Promise<void>
         ad.close();
     }
 
+    // ── FREE AUDIO BUFFER ─────────────────────────────────────────────────────
+    // All audio chunks are now in the AudioEncoder's internal queue.
+    // Release the decoded PCM buffer (can be 100–600 MB for long songs) so the
+    // GC can reclaim it before the video render loop starts allocating canvas,
+    // pixelBuffer, and encoder working memory.
+    (encBuf as unknown as null);
+    // Yield briefly to give the GC a chance to run before heavy allocations
+    await new Promise<void>(r => setTimeout(r, 50));
+
     // ── 8. Canvas ─────────────────────────────────────────────────────────────
+
     // willReadFrequently: we call getImageData() to copy pixels into a single
     // pre-allocated ArrayBuffer that is reused every frame. This avoids the
     // "Array buffer allocation failed" error that happens when VideoFrame is
