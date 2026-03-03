@@ -1,4 +1,0 @@
-node_modules/
-public/ffmpeg-core.wasm
-.env
-*.log

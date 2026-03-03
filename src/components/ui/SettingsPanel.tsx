@@ -15,7 +15,7 @@ type TabType = 'visuals' | 'center' | 'effects' | 'tuning';
 
 // ── Accordion section ──────────────────────────────────────────────────────────
 function AccordionSection({ title, children, defaultOpen = false }: {
-    title: string; children: React.ReactNode; defaultOpen?: boolean;
+    title: string; children: React.ReactNode; defaultOpen?: boolean; key?: React.Key;
 }) {
     const [open, setOpen] = useState(defaultOpen);
     return (

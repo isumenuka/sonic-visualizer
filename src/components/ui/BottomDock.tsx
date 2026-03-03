@@ -8,20 +8,18 @@ export interface BottomDockProps {
     isPlaying: boolean;
     showControls: boolean;
     isLiveRecording: boolean;
-    recordingQuality: '1080p' | '2k' | '4k';
     togglePlay: () => void;
     onAudioUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onBgUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onCenterImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onToggleSettings: () => void;
-    onQualityChange: (quality: '1080p' | '2k' | '4k') => void;
     onLiveRecord: () => void;
 }
 
 export function BottomDock({
     audioFile, bgFile, centerImage, isPlaying, showControls, isLiveRecording,
-    recordingQuality, togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
-    onToggleSettings, onQualityChange, onLiveRecord
+    togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
+    onToggleSettings, onLiveRecord
 }: BottomDockProps) {
 
     return (
@@ -89,25 +87,11 @@ export function BottomDock({
 
                 <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
 
-                {/* ── Quality selector ── */}
-                <div className="flex items-center gap-0.5 bg-white/5 rounded-full px-1 py-1 border border-white/10 shrink-0">
-                    {(['1080p', '2k', '4k'] as const).map(q => (
-                        <button
-                            key={q}
-                            onClick={() => onQualityChange(q)}
-                            disabled={isLiveRecording}
-                            className={`px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[11px] font-bold uppercase tracking-wider transition-all ${recordingQuality === q ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
-                        >
-                            {q}
-                        </button>
-                    ))}
-                </div>
-
                 {/* ── Export / Download button ── */}
                 <button
                     onClick={onLiveRecord}
                     disabled={!audioFile}
-                    title={isLiveRecording ? 'Recording… click to stop & download' : 'Export — record & download video'}
+                    title={isLiveRecording ? 'Recording… click to stop & download MP4' : 'Export — record & download MP4 video'}
                     className={`
                         flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2
                         rounded-full font-semibold text-[10px] sm:text-[11px] tracking-wide
@@ -126,7 +110,7 @@ export function BottomDock({
                             <span className="relative flex items-center justify-center w-3.5 h-3.5">
                                 <Download className="w-3.5 h-3.5 animate-bounce" />
                             </span>
-                            <span>Downloading…</span>
+                            <span>Saving MP4…</span>
                             {/* Shimmer sweep animation */}
                             <span className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
                                 <span className="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-black/10 to-transparent animate-[shimmer_1.4s_ease-in-out_infinite]" />
@@ -137,7 +121,7 @@ export function BottomDock({
                     ) : (
                         <>
                             <Download className="w-3.5 h-3.5 shrink-0" />
-                            <span>Export</span>
+                            <span>Export MP4</span>
                         </>
                     )}
                 </button>

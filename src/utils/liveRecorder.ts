@@ -1,12 +1,4 @@
-/**
- * Live Record Engine
- * ─────────────────
- * Records the canvas + audio in real-time using MediaRecorder API.
- * Much simpler than the export engines — just captures whatever is
- * currently rendered as the song plays back.
- *
- * Output: WebM (VP9 + Opus) — compatible with YouTube, Discord, etc.
- */
+import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 
 export interface LiveRecordOptions {
     canvas: HTMLCanvasElement;
@@ -18,16 +10,23 @@ export interface LiveRecordOptions {
 }
 
 export class LiveRecorder {
-    private recorder: MediaRecorder | null = null;
-    private chunks: Blob[] = [];
-    private stream: MediaStream | null = null;
-    private audioDestNode: MediaStreamAudioDestinationNode | null = null;
-    private audioCtx: AudioContext;
-    private audioElement: HTMLAudioElement;
-    private audioSourceNode?: MediaElementAudioSourceNode;
     private canvas: HTMLCanvasElement;
+    private audioElement: HTMLAudioElement;
+    private audioCtx: AudioContext;
+    private audioSourceNode?: MediaElementAudioSourceNode;
     private fps: number;
     private onStop?: (blob: Blob) => void;
+
+    private muxer: any = null;
+    private videoEncoder: VideoEncoder | null = null;
+    private audioEncoder: AudioEncoder | null = null;
+    private _isRecording: boolean = false;
+    private startTime: number = 0;
+    private lastFrameTime: number = 0;
+    private frameHandle: number = 0;
+
+    private audioDestNode: MediaStreamAudioDestinationNode | null = null;
+    private trackReader: ReadableStreamDefaultReader<any> | null = null;
 
     constructor(options: LiveRecordOptions) {
         this.canvas = options.canvas;
@@ -38,107 +37,135 @@ export class LiveRecorder {
         this.onStop = options.onStop;
     }
 
-    /** Returns true if MediaRecorder is supported in this browser */
     static isSupported(): boolean {
-        return typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement.prototype.captureStream === 'function';
+        return typeof VideoEncoder !== 'undefined' && typeof AudioEncoder !== 'undefined';
     }
 
-    /** Returns the best supported MIME type for recording */
-    static getMimeType(): string {
-        const candidates = [
-            // MP4 first — H.264+AAC, natively plays everywhere
-            'video/mp4;codecs=avc1,mp4a.40.2',  // Chrome Windows, Safari
-            'video/mp4;codecs=avc1',
-            'video/mp4',
-            // WebM fallback (Firefox, older Chrome on Linux/Mac)
-            'video/webm;codecs=vp9,opus',
-            'video/webm;codecs=vp8,opus',
-            'video/webm',
-        ];
-        for (const type of candidates) {
-            if (MediaRecorder.isTypeSupported(type)) return type;
-        }
-        return '';
-    }
+    async start(): Promise<void> {
+        if (this._isRecording) return;
+        this._isRecording = true;
 
-    start(): void {
-        if (this.recorder?.state === 'recording') return;
+        const target = new ArrayBufferTarget();
+        this.muxer = new Muxer({
+            target,
+            video: { codec: 'avc', width: this.canvas.width, height: this.canvas.height },
+            audio: { codec: 'aac', sampleRate: this.audioCtx.sampleRate, numberOfChannels: 2 },
+            firstTimestampBehavior: 'offset',
+            fastStart: 'in-memory',
+        });
 
-        this.chunks = [];
+        this.videoEncoder = new VideoEncoder({
+            output: (chunk, meta) => this.muxer.addVideoChunk(chunk, meta),
+            error: (e) => console.error('VideoEncoder error:', e),
+        });
+        const bitrate = this.canvas.width * this.canvas.height * this.fps * 0.14;
+        this.videoEncoder.configure({
+            codec: 'avc1.420028',
+            width: this.canvas.width,
+            height: this.canvas.height,
+            bitrate: Math.min(bitrate, 20_000_000),
+            framerate: this.fps,
+        });
 
-        // 1. Capture canvas frames
-        const videoStream = this.canvas.captureStream(this.fps);
+        this.audioEncoder = new AudioEncoder({
+            output: (chunk, meta) => this.muxer.addAudioChunk(chunk, meta),
+            error: (e) => console.error('AudioEncoder error:', e),
+        });
+        this.audioEncoder.configure({
+            codec: 'mp4a.40.2',
+            sampleRate: this.audioCtx.sampleRate,
+            numberOfChannels: 2,
+            bitrate: 192_000,
+        });
 
-        // 2. Capture audio through AudioContext MediaStreamDestination node
-        //    (this taps into the same audio graph that drives the analyser,
-        //     so the recording is always perfectly synced with the visualizer)
         this.audioDestNode = this.audioCtx.createMediaStreamDestination();
-
-        // Connect the audio source → the recording destination
-        // We do this by capturing the stream from the WebAudio API destination node
-        let audioTracks: MediaStreamTrack[] = [];
-        try {
-            if (this.audioDestNode && this.audioSourceNode) {
-                // Route the original audio source into the new generic destination
-                this.audioSourceNode.connect(this.audioDestNode);
-                audioTracks = this.audioDestNode.stream.getAudioTracks();
+        if (this.audioSourceNode) {
+            this.audioSourceNode.connect(this.audioDestNode);
+            const audioTrack = this.audioDestNode.stream.getAudioTracks()[0];
+            if (audioTrack && typeof MediaStreamTrackProcessor !== 'undefined') {
+                const processor = new MediaStreamTrackProcessor({ track: audioTrack } as any);
+                this.trackReader = processor.readable.getReader();
+                this.processAudio();
             }
-        } catch (err) {
-            console.error('Audio track capture failed:', err);
         }
 
-        // Combine video + audio into one stream
-        const tracks = [...videoStream.getVideoTracks(), ...audioTracks];
-        this.stream = new MediaStream(tracks);
-
-        const mimeType = LiveRecorder.getMimeType();
-        const recorderOptions: MediaRecorderOptions = {};
-        if (mimeType) recorderOptions.mimeType = mimeType;
-        // Auto-scale bitrate to canvas resolution
-        // ~0.14 bits/pixel/frame → 1080p@30fps ≈ 8 Mbps, 2K ≈ 15 Mbps, 4K ≈ 35 Mbps
-        const pixels = this.canvas.width * this.canvas.height;
-        recorderOptions.videoBitsPerSecond = Math.min(
-            Math.round(pixels * this.fps * 0.14),
-            40_000_000 // 40 Mbps cap for 4K
-        );
-
-        this.recorder = new MediaRecorder(this.stream, recorderOptions);
-
-        this.recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) this.chunks.push(e.data);
-        };
-
-        this.recorder.onstop = () => {
-            const mimeType = this.recorder?.mimeType || 'video/webm';
-            const blob = new Blob(this.chunks, { type: mimeType });
-            this.chunks = [];
-            this.stream?.getTracks().forEach(t => t.stop());
-            this.stream = null;
-            this.onStop?.(blob);
-        };
-
-        // Collect a chunk every second so data is available even on stop
-        this.recorder.start(1000);
+        this.startTime = performance.now();
+        this.lastFrameTime = this.startTime;
+        this.captureLoop();
     }
 
-    stop(): void {
-        if (this.recorder && this.recorder.state !== 'inactive') {
-            this.recorder.stop();
+    private async processAudio() {
+        if (!this.trackReader) return;
+        try {
+            while (this._isRecording) {
+                const { done, value } = await this.trackReader.read();
+                if (done) break;
+                if (value && this.audioEncoder?.state === 'configured') {
+                    this.audioEncoder.encode(value);
+                    value.close();
+                }
+            }
+        } catch (e) {
+            // Ignored
         }
     }
 
-    get isRecording(): boolean {
-        return this.recorder?.state === 'recording';
+    private captureLoop = () => {
+        if (!this._isRecording) return;
+        this.frameHandle = requestAnimationFrame(this.captureLoop);
+
+        const now = performance.now();
+        const elapsed = now - this.lastFrameTime;
+        const frameDuration = 1000 / this.fps;
+
+        if (elapsed >= frameDuration) {
+            this.lastFrameTime = now - (elapsed % frameDuration);
+            const timestamp = (now - this.startTime) * 1000;
+
+            if (this.videoEncoder?.state === 'configured') {
+                const frame = new VideoFrame(this.canvas, { timestamp });
+                const keyFrame = (timestamp / 1_000_000) % 2 === 0;
+                this.videoEncoder.encode(frame, { keyFrame });
+                frame.close();
+            }
+        }
+    }
+
+    get isRecording(): boolean { return this._isRecording; }
+
+    async stop(): Promise<void> {
+        if (!this._isRecording) return;
+        this._isRecording = false;
+        cancelAnimationFrame(this.frameHandle);
+
+        if (this.audioSourceNode && this.audioDestNode) {
+            try { this.audioSourceNode.disconnect(this.audioDestNode); } catch (e) { }
+        }
+        if (this.trackReader) {
+            try { await this.trackReader.cancel(); } catch (e) { }
+            this.trackReader = null;
+        }
+
+        await Promise.all([
+            this.videoEncoder?.flush().catch(() => { }),
+            this.audioEncoder?.flush().catch(() => { }),
+        ]);
+
+        this.videoEncoder?.close();
+        this.audioEncoder?.close();
+        this.muxer.finalize();
+
+        const buffer = this.muxer.target.buffer;
+        const blob = new Blob([buffer], { type: 'video/mp4' });
+        this.onStop?.(blob);
     }
 }
 
-/** Download a Blob as a video file */
 export function downloadRecording(blob: Blob, fileName = 'sonic-visualizer-live'): void {
-    const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${fileName}.${ext}`;
+    a.download = `${fileName}.mp4`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }

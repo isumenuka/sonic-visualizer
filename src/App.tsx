@@ -44,7 +44,7 @@ export default function App() {
   const [shakeOffset, setShakeOffset] = useState({ x: 0, y: 0 });
 
   // ── Recording quality ────────────────────────────────────────────────────
-  const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
+  // Removed (legacy GPU options out, simple live MP4 record remains)
 
   // ── Live Record ──────────────────────────────────────────────────────────
   const [isLiveRecording, setIsLiveRecording] = useState(false);
@@ -142,7 +142,7 @@ export default function App() {
   }, []);
 
   // ── Resolution map ───────────────────────────────────────────────────────
-  const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
+  // Resolution map removed
 
   // ── Live Record ─────────────────────────────────────────────────────────
   const startLiveRecord = () => {
@@ -725,7 +725,7 @@ export default function App() {
               style={{ transform: `translate(${shakeOffset.x}px,${shakeOffset.y}px)` }}
             />
 
-            {/* ── Background-export overlay ── shown while recording so user can do other things */}
+            {/* ── Background-export overlay ── shown while recording */}
             {isLiveRecording && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center
                               bg-black/85 backdrop-blur-md">
@@ -742,7 +742,7 @@ export default function App() {
                   <span className="absolute inset-0 rounded-full bg-white/5 blur-xl animate-pulse" />
                 </div>
 
-                <p className="text-white font-bold text-lg tracking-tight mb-1">Exporting Video</p>
+                <p className="text-white font-bold text-lg tracking-tight mb-1">Recording MP4 Video</p>
                 <p className="text-neutral-400 text-[11px] text-center max-w-[200px] leading-relaxed mb-6 uppercase tracking-wider font-semibold">
                   Recording visualizer silently in real-time.
                 </p>
@@ -807,13 +807,11 @@ export default function App() {
           isPlaying={isPlaying}
           showControls={showControls}
           isLiveRecording={isLiveRecording}
-          recordingQuality={recordingQuality}
           togglePlay={togglePlay}
           onAudioUpload={handleAudioUpload}
           onBgUpload={handleBgUpload}
           onCenterImageUpload={handleCenterImageUpload}
           onToggleSettings={() => setShowControls(v => !v)}
-          onQualityChange={setRecordingQuality}
           onLiveRecord={isLiveRecording ? stopLiveRecord : startLiveRecord}
         />
       </div>
