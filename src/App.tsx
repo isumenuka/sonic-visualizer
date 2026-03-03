@@ -439,41 +439,53 @@ export default function App() {
     <div className="w-full h-screen flex flex-col overflow-hidden select-none bg-black">
 
       {/* ── HEADER ── */}
-      <header className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-2.5 h-12 sm:h-14
-                         border-b border-white/8 bg-black/60 backdrop-blur-xl relative z-10">
+      <header className="shrink-0 flex items-center px-4 sm:px-6 h-12 sm:h-14
+                         border-b border-white/8 bg-black backdrop-blur-xl relative z-10">
 
-        {/* Brand */}
-        <span className="text-sm font-semibold text-white tracking-tight">Sonic Visualizer</span>
+        {/* Left spacer — matches right side for centering */}
+        <div className="flex-1" />
 
-        {/* Aspect ratio */}
-        <div className="flex items-center gap-1 bg-white/5 rounded-xl p-0.5 border border-white/10">
-          {(['16:9', '9:16'] as AspectRatio[]).map(r => (
-            <button
-              key={r}
-              onClick={() => setAspectRatio(r)}
-              className={`px-3 py-1 text-[10px] sm:text-xs font-bold rounded-lg transition-all ${aspectRatio === r
-                ? 'bg-white text-black'
-                : 'text-neutral-400 hover:text-white'
-                }`}
-            >
-              {r}
-            </button>
-          ))}
+        {/* Logo — centered */}
+        <div className="relative flex items-center justify-center" style={{ width: 44, height: 44 }}>
+          <div className="absolute inset-0 rounded-full"
+            style={{
+              background: 'radial-gradient(circle, rgba(255,255,255,0.25) 0%, transparent 70%)',
+              animation: 'logoPulse 2.4s ease-in-out infinite',
+            }} />
+          <img
+            src="/favicon.ico"
+            alt="Sonic Visualizer"
+            className="relative z-10 rounded-md"
+            style={{ width: 36, height: 36, imageRendering: 'auto' }}
+          />
         </div>
 
-        {/* Performance toggle */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] text-neutral-400 hidden sm:block">Perf Mode</span>
-          <button
-            onClick={handleTogglePerformance}
-            className={`w-9 h-5 rounded-full relative transition-colors ${performanceMode ? 'bg-white' : 'bg-neutral-700'
-              }`}
-          >
-            <div className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform ${performanceMode ? 'bg-black translate-x-4' : 'bg-neutral-400 translate-x-0'
-              }`} />
-          </button>
+        {/* Right — aspect ratio toggle */}
+        <div className="flex-1 flex justify-end">
+          <div className="flex items-center gap-px bg-white/5 rounded-lg p-0.5 border border-white/10">
+            {(['16:9', '9:16'] as AspectRatio[]).map(r => (
+              <button
+                key={r}
+                onClick={() => setAspectRatio(r)}
+                className={`px-3 py-1 text-[10px] sm:text-xs font-bold rounded-md transition-all ${aspectRatio === r
+                  ? 'bg-white text-black'
+                  : 'text-neutral-400 hover:text-white'
+                  }`}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
+
+      {/* Keyframe styles */}
+      <style>{`
+        @keyframes logoPulse {
+          0%, 100% { transform: scale(1); opacity: 0.4; }
+          50% { transform: scale(1.7); opacity: 0.9; }
+        }
+      `}</style>
 
       {/* ── MAIN CONTENT: preview + sidebar ── */}
       <div className="flex-1 flex flex-row overflow-hidden min-h-0">
