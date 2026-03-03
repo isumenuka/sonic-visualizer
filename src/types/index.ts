@@ -1,4 +1,4 @@
-export type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'spikes' | 'laser' | 'nebula' | 'aura' | 'peaks';
+export type VisualizerType = 'bars' | 'wave' | 'spiral' | 'particles' | 'ring' | 'strings' | 'orbit' | 'spikes' | 'laser' | 'nebula' | 'aura' | 'peaks' | 'diamond' | 'tunnel' | 'frequency' | 'fractal' | 'helix' | 'constellation' | 'lightning' | 'waveform' | 'prism';
 export type CenterMode = 'logo' | 'profile' | 'text' | 'none';
 
 export interface VisualizerSettings {
@@ -26,4 +26,12 @@ export interface VisualizerSettings {
     invertColors: boolean;
     bgParticlesEnabled: boolean;
     performanceMode: boolean;
+    starburstEnabled: boolean;
+    kaleidoscopeEnabled: boolean;
+    scanlineEnabled: boolean;
+    chromaticEnabled: boolean;
+    vignetteEnabled: boolean;
+    pixelateEnabled: boolean;
+    strobeEnabled: boolean;
+    rippleEnabled: boolean;
 }

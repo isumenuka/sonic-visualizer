@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Image as ImageIcon, Settings, RotateCcw, Palette, Wand2, Sliders, User } from 'lucide-react';
+import { X, Image as ImageIcon, Settings, RotateCcw, Palette, Wand2, Sliders, User, ChevronDown } from 'lucide-react';
 import { VisualizerSettings } from '../../types';
 
 export interface SettingsPanelProps {
@@ -13,6 +13,43 @@ export interface SettingsPanelProps {
 
 type TabType = 'visuals' | 'center' | 'effects' | 'tuning';
 
+// ── Accordion section ──────────────────────────────────────────────────────────
+function AccordionSection({ title, children, defaultOpen = false }: {
+    title: string; children: React.ReactNode; defaultOpen?: boolean;
+}) {
+    const [open, setOpen] = useState(defaultOpen);
+    return (
+        <div className="rounded-xl border border-white/8 overflow-hidden">
+            <button
+                onClick={() => setOpen(v => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 bg-white/5 hover:bg-white/10 transition-colors"
+            >
+                <span className="text-[10px] font-semibold text-neutral-300 uppercase tracking-wider">{title}</span>
+                <ChevronDown
+                    className="w-3 h-3 text-neutral-400 transition-transform duration-200"
+                    style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                />
+            </button>
+            <AnimatePresence initial={false}>
+                {open && (
+                    <motion.div
+                        key="content"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                        className="overflow-hidden"
+                    >
+                        <div className="p-2">
+                            {children}
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+}
+
 export function SettingsPanel({ showControls, onClose, bgImage, settings, setSettings }: SettingsPanelProps) {
     const [activeTab, setActiveTab] = useState<TabType>('visuals');
 
@@ -24,7 +61,7 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
     ];
 
     const renderToggle = (label: string, desc: string, value: boolean, onChange: () => void, isDanger?: boolean) => (
-        <div className="flex items-center justify-between p-2.5 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
+        <div className="flex items-center justify-between py-2 px-1 border-b border-white/5 last:border-0 hover:bg-white/5 rounded-lg transition-colors">
             <div className="flex-1 min-w-0 pr-2">
                 <div className={`text-xs font-medium ${isDanger ? 'text-rose-400' : 'text-neutral-200'}`}>{label}</div>
                 <div className="text-[9px] text-neutral-500 mt-0.5 leading-tight">{desc}</div>
@@ -36,11 +73,69 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
         </div>
     );
 
+    const renderStyleGrid = (types: string[]) => (
+        <div className="grid grid-cols-3 gap-1">
+            {types.map(type => (
+                <button key={type}
+                    onClick={() => setSettings(s => ({ ...s, type: type as any }))}
+                    className={`py-2 text-[10px] rounded-lg font-medium transition-all border capitalize ${settings.type === type
+                        ? 'bg-white text-black border-transparent'
+                        : 'bg-white/5 text-neutral-300 border-white/5 hover:bg-white/10'}`}>
+                    {type}
+                </button>
+            ))}
+        </div>
+    );
+
+    // ── Visual categories ──────────────────────────────────────────────────────
+    const visualCategories = [
+        { label: '〰 Wave & Line', types: ['bars', 'wave', 'ring', 'waveform', 'strings'], open: true },
+        { label: '✦ Particle & Space', types: ['particles', 'nebula', 'constellation', 'orbit'], open: false },
+        { label: '◈ Geometric', types: ['spiral', 'spikes', 'diamond', 'fractal', 'prism', 'tunnel'], open: false },
+        { label: '⚡ Energy', types: ['laser', 'lightning', 'aura', 'peaks', 'helix', 'frequency'], open: false },
+    ];
+
+    // ── Effect categories ──────────────────────────────────────────────────────
+    type EffectToggle = [string, string, boolean, () => void, boolean?];
+    const effectCategories: { label: string; open: boolean; effects: EffectToggle[] }[] = [
+        {
+            label: '🥁 Beat Reactive', open: true, effects: [
+                ['Beat Pulse', 'Scale reacts to bass', settings.pulseEnabled, () => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled }))],
+                ['Camera Shake', 'Screen trembles on heavy bass', settings.shakeEnabled, () => setSettings(s => ({ ...s, shakeEnabled: !s.shakeEnabled }))],
+                ['Starburst', 'Light rays from center on mids', settings.starburstEnabled, () => setSettings(s => ({ ...s, starburstEnabled: !s.starburstEnabled }))],
+                ['Strobe', 'White flash on heavy bass', settings.strobeEnabled, () => setSettings(s => ({ ...s, strobeEnabled: !s.strobeEnabled }))],
+                ['Ripple', 'Expanding rings from center', settings.rippleEnabled, () => setSettings(s => ({ ...s, rippleEnabled: !s.rippleEnabled }))],
+            ],
+        },
+        {
+            label: '✨ Visual FX', open: false, effects: [
+                ['Glow', 'Bloom light on visualizer', settings.glowEnabled, () => setSettings(s => ({ ...s, glowEnabled: !s.glowEnabled }))],
+                ['Trail', 'Fading ghost traces', settings.trailEnabled, () => setSettings(s => ({ ...s, trailEnabled: !s.trailEnabled }))],
+                ['Color Cycle', 'Auto-cycles hue over time', settings.colorCycle, () => setSettings(s => ({ ...s, colorCycle: !s.colorCycle }))],
+                ['Chromatic Aberration', 'RGB channel split on mids', settings.chromaticEnabled, () => setSettings(s => ({ ...s, chromaticEnabled: !s.chromaticEnabled }))],
+                ['Vignette', 'Dark pulsing edges on bass', settings.vignetteEnabled, () => setSettings(s => ({ ...s, vignetteEnabled: !s.vignetteEnabled }))],
+                ['Scanlines', 'CRT scanline overlay', settings.scanlineEnabled, () => setSettings(s => ({ ...s, scanlineEnabled: !s.scanlineEnabled }))],
+                ['Pixelate', 'Block pixels react to audio', settings.pixelateEnabled, () => setSettings(s => ({ ...s, pixelateEnabled: !s.pixelateEnabled }))],
+            ],
+        },
+        {
+            label: '🔮 Transform', open: false, effects: [
+                ['Mirror Spectrum', 'Reflects frequency horizontally', settings.mirror, () => setSettings(s => ({ ...s, mirror: !s.mirror }))],
+                ['Ghost Echo', 'Expanding translucent layers', settings.echoEnabled, () => setSettings(s => ({ ...s, echoEnabled: !s.echoEnabled }))],
+                ['Kaleidoscope', 'Mirror slices into kaleidoscope', settings.kaleidoscopeEnabled, () => setSettings(s => ({ ...s, kaleidoscopeEnabled: !s.kaleidoscopeEnabled }))],
+                ['Particles Overlay', 'Floating background dust', settings.bgParticlesEnabled, () => setSettings(s => ({ ...s, bgParticlesEnabled: !s.bgParticlesEnabled }))],
+            ],
+        },
+        {
+            label: '⚠ Danger Zone', open: false, effects: [
+                ['Invert Colors', 'Negative mode', settings.invertColors, () => setSettings(s => ({ ...s, invertColors: !s.invertColors })), true],
+            ],
+        },
+    ];
+
     return (
         <AnimatePresence>
             {showControls && (
-                /* This component is embedded as a right sidebar in App.tsx.
-                   It fills 100% of the column container — no fixed positioning. */
                 <motion.div
                     key="settings-sidebar"
                     initial={{ opacity: 0 }}
@@ -73,30 +168,25 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
                     </div>
 
                     {/* Scrollable content */}
-                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-4">
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
                         <AnimatePresence mode="wait">
                             <motion.div key={activeTab}
                                 initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }}
                                 exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.12 }}
-                                className="space-y-4">
+                                className="space-y-2">
 
                                 {/* ── VISUALS ── */}
                                 {activeTab === 'visuals' && (
-                                    <div className="space-y-4">
-                                        <div className="space-y-2">
-                                            <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Style</label>
-                                            <div className="grid grid-cols-3 gap-1">
-                                                {['bars', 'wave', 'spiral', 'particles', 'ring', 'strings', 'orbit', 'spikes', 'laser', 'nebula', 'aura', 'peaks'].map(type => (
-                                                    <button key={type}
-                                                        onClick={() => setSettings(s => ({ ...s, type: type as any }))}
-                                                        className={`py-2 text-[10px] rounded-lg font-medium transition-all border capitalize ${settings.type === type ? 'bg-white text-black border-transparent' : 'bg-white/5 text-neutral-300 border-white/5 hover:bg-white/10'}`}>
-                                                        {type}
-                                                    </button>
-                                                ))}
-                                            </div>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider block">Color Palette</label>
+                                    <div className="space-y-2">
+                                        {/* Style accordion categories */}
+                                        {visualCategories.map(cat => (
+                                            <AccordionSection key={cat.label} title={cat.label} defaultOpen={cat.open}>
+                                                {renderStyleGrid(cat.types)}
+                                            </AccordionSection>
+                                        ))}
+
+                                        {/* Color palette */}
+                                        <AccordionSection title="🎨 Color Palette" defaultOpen={true}>
                                             <div className="flex gap-2">
                                                 <div className="flex-1 space-y-1">
                                                     <input type="color" value={settings.primaryColor}
@@ -111,7 +201,7 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
                                                     <div className="text-[9px] text-center text-neutral-400">Secondary</div>
                                                 </div>
                                             </div>
-                                        </div>
+                                        </AccordionSection>
                                     </div>
                                 )}
 
@@ -143,16 +233,16 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
 
                                 {/* ── EFFECTS ── */}
                                 {activeTab === 'effects' && (
-                                    <div className="space-y-1.5">
-                                        {renderToggle("Particles Overlay", "Floating background dust", settings.bgParticlesEnabled, () => setSettings(s => ({ ...s, bgParticlesEnabled: !s.bgParticlesEnabled })))}
-                                        {renderToggle("Mirror Spectrum", "Reflects frequency horizontally", settings.mirror, () => setSettings(s => ({ ...s, mirror: !s.mirror })))}
-                                        {renderToggle("Beat Pulse", "Scale reacts to bass", settings.pulseEnabled, () => setSettings(s => ({ ...s, pulseEnabled: !s.pulseEnabled })))}
-                                        {renderToggle("Glow", "Bloom light on visualizer", settings.glowEnabled, () => setSettings(s => ({ ...s, glowEnabled: !s.glowEnabled })))}
-                                        {renderToggle("Trail", "Fading ghost traces", settings.trailEnabled, () => setSettings(s => ({ ...s, trailEnabled: !s.trailEnabled })))}
-                                        {renderToggle("Color Cycle", "Auto-cycles hue over time", settings.colorCycle, () => setSettings(s => ({ ...s, colorCycle: !s.colorCycle })))}
-                                        {renderToggle("Camera Shake", "Screen trembles on heavy bass", settings.shakeEnabled, () => setSettings(s => ({ ...s, shakeEnabled: !s.shakeEnabled })))}
-                                        {renderToggle("Ghost Echo", "Expanding translucent layers", settings.echoEnabled, () => setSettings(s => ({ ...s, echoEnabled: !s.echoEnabled })))}
-                                        {renderToggle("Invert Colors", "Negative mode", settings.invertColors, () => setSettings(s => ({ ...s, invertColors: !s.invertColors })), true)}
+                                    <div className="space-y-2">
+                                        {effectCategories.map(cat => (
+                                            <AccordionSection key={cat.label} title={cat.label} defaultOpen={cat.open}>
+                                                <div>
+                                                    {cat.effects.map(([label, desc, value, onChange, isDanger]) =>
+                                                        renderToggle(label as string, desc as string, value as boolean, onChange as () => void, isDanger as boolean | undefined)
+                                                    )}
+                                                </div>
+                                            </AccordionSection>
+                                        ))}
                                     </div>
                                 )}
 
@@ -160,15 +250,12 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
                                 {activeTab === 'tuning' && (
                                     <div className="space-y-5">
                                         {bgImage && (
-                                            <div className="space-y-3">
-                                                <div className="flex items-center gap-1.5 text-[9px] font-semibold text-neutral-400 uppercase tracking-wider">
-                                                    <ImageIcon className="w-3 h-3" /> Background
-                                                </div>
+                                            <AccordionSection title="🖼 Background" defaultOpen={true}>
                                                 {[
                                                     { label: 'Blur', key: 'bgBlur', min: 0, max: 50, step: 1, unit: 'px' },
                                                     { label: 'Opacity', key: 'bgOpacity', min: 0, max: 1, step: 0.05, unit: '%', display: (v: number) => Math.round(v * 100) + '%' },
                                                 ].map(({ label, key, min, max, step, unit, display }) => (
-                                                    <div key={key} className="space-y-1">
+                                                    <div key={key} className="space-y-1 mb-2">
                                                         <div className="flex justify-between text-[9px] font-medium">
                                                             <span className="text-neutral-300">{label}</span>
                                                             <span className="text-white bg-white/10 px-1.5 py-0.5 rounded">
@@ -180,17 +267,16 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
                                                             className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white" />
                                                     </div>
                                                 ))}
-                                            </div>
+                                            </AccordionSection>
                                         )}
 
-                                        <div className="space-y-3">
-                                            <div className="text-[9px] font-semibold text-neutral-400 uppercase tracking-wider">Engine</div>
+                                        <AccordionSection title="⚙ Engine" defaultOpen={true}>
                                             {[
                                                 { label: 'Rotation Speed', key: 'rotationSpeed', min: -5, max: 5, step: 0.1, def: 0, unit: '' },
                                                 { label: 'Radius', key: 'radius', min: 50, max: 300, step: 1, def: 150, unit: 'px' },
                                                 { label: 'Sensitivity', key: 'sensitivity', min: 0.5, max: 3, step: 0.1, def: 1.5, unit: 'x' },
                                             ].map(({ label, key, min, max, step, def, unit }) => (
-                                                <div key={key} className="space-y-1">
+                                                <div key={key} className="space-y-1 mb-2">
                                                     <div className="flex justify-between items-center text-[9px] font-medium">
                                                         <span className="text-neutral-300">{label}</span>
                                                         <div className="flex items-center gap-1">
@@ -206,7 +292,7 @@ export function SettingsPanel({ showControls, onClose, bgImage, settings, setSet
                                                         className="w-full h-1.5 bg-neutral-800 rounded-full appearance-none cursor-pointer accent-white" />
                                                 </div>
                                             ))}
-                                        </div>
+                                        </AccordionSection>
                                     </div>
                                 )}
 

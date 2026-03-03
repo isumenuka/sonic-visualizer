@@ -13,7 +13,9 @@ import { extractColors } from './utils/color';
 import {
   drawCircularBars, drawCircularWave, drawSpiral, drawParticles,
   drawRing, drawStrings, drawOrbit, drawSpikes, drawLaser,
-  drawNebula, drawAura, drawPeaks
+  drawNebula, drawAura, drawPeaks,
+  drawDiamond, drawTunnel, drawFrequency, drawFractal,
+  drawHelix, drawConstellation, drawLightning, drawWaveform, drawPrism
 } from './visualizers/drawings';
 import { LiveRecorder, downloadRecording } from './utils/liveRecorder';
 
@@ -75,6 +77,14 @@ export default function App() {
     invertColors: false,
     bgParticlesEnabled: false,
     performanceMode: false,
+    starburstEnabled: false,
+    kaleidoscopeEnabled: false,
+    scanlineEnabled: false,
+    chromaticEnabled: false,
+    vignetteEnabled: false,
+    pixelateEnabled: false,
+    strobeEnabled: false,
+    rippleEnabled: false,
   });
 
   // ── Refs ─────────────────────────────────────────────────────────────────
@@ -385,12 +395,148 @@ export default function App() {
         else if (s.type === 'nebula') drawNebula(ctx, dataArray, centerX, centerY, currentRadius, nebParticles, vizS);
         else if (s.type === 'aura') drawAura(ctx, dataArray, centerX, centerY, currentRadius, vizS);
         else if (s.type === 'peaks') drawPeaks(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'diamond') drawDiamond(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'tunnel') drawTunnel(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'frequency') drawFrequency(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'fractal') drawFractal(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'helix') drawHelix(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'constellation') drawConstellation(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'lightning') drawLightning(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'waveform') drawWaveform(ctx, dataArray, centerX, centerY, currentRadius, vizS);
+        else if (s.type === 'prism') drawPrism(ctx, dataArray, centerX, centerY, currentRadius, vizS);
         ctx.restore();
       };
 
       renderViz(1, 1);
       if (s.echoEnabled) { renderViz(1.2, .3); renderViz(1.5, .1); }
       ctx.shadowBlur = 0;
+
+      // ── Starburst overlay ──────────────────────────────────────────────────
+      if (s.starburstEnabled) {
+        let avgHigh = 0;
+        for (let i = 80; i < 200; i++) avgHigh += dataArray[i];
+        avgHigh = avgHigh / 120 / 255;
+        const rays = 16;
+        for (let i = 0; i < rays; i++) {
+          const angle = (i / rays) * Math.PI * 2;
+          const len = currentRadius * (0.3 + avgHigh * 1.2 * s.sensitivity);
+          ctx.beginPath();
+          ctx.moveTo(centerX, centerY);
+          ctx.lineTo(centerX + Math.cos(angle) * len, centerY + Math.sin(angle) * len);
+          ctx.strokeStyle = i % 2 === 0 ? vizPC : vizSC;
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = avgHigh * 0.6;
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // ── Scanline overlay ───────────────────────────────────────────────────
+      if (s.scanlineEnabled) {
+        const lineSpacing = 4;
+        ctx.save();
+        for (let y = 0; y < virtualHeight; y += lineSpacing) {
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(virtualWidth, y);
+          ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // ── Kaleidoscope overlay ───────────────────────────────────────────────
+      if (s.kaleidoscopeEnabled) {
+        const slices = 8;
+        ctx.save();
+        ctx.globalAlpha = 0.18;
+        ctx.globalCompositeOperation = 'screen';
+        for (let k = 1; k < slices; k++) {
+          const kAngle = (k / slices) * Math.PI * 2;
+          ctx.save();
+          ctx.translate(centerX, centerY);
+          ctx.rotate(kAngle);
+          ctx.scale(1, -1);
+          ctx.translate(-centerX, -centerY);
+          ctx.drawImage(ctx.canvas, 0, 0);
+          ctx.restore();
+        }
+        ctx.globalAlpha = 1;
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.restore();
+      }
+
+      // ── Vignette overlay ───────────────────────────────────────────────────
+      if (s.vignetteEnabled) {
+        let b = 0; for (let i = 0; i < 20; i++) b += dataArray[i]; b = b / 20 / 255;
+        const vigGrad = ctx.createRadialGradient(centerX, centerY, currentRadius * 0.4, centerX, centerY, Math.max(virtualWidth, virtualHeight) * 0.8);
+        vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        vigGrad.addColorStop(1, `rgba(0,0,0,${0.5 + b * 0.5})`);
+        ctx.save(); ctx.fillStyle = vigGrad; ctx.fillRect(0, 0, virtualWidth, virtualHeight); ctx.restore();
+      }
+
+      // ── Chromatic Aberration ───────────────────────────────────────────────
+      if (s.chromaticEnabled) {
+        let avgMid = 0; for (let i = 40; i < 80; i++) avgMid += dataArray[i]; avgMid = avgMid / 40 / 255;
+        const shift = avgMid * 8 * s.sensitivity;
+        if (shift > 0.5) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'screen';
+          ctx.globalAlpha = 0.25;
+          ctx.drawImage(ctx.canvas, shift, 0);
+          ctx.globalAlpha = 0.15;
+          ctx.drawImage(ctx.canvas, -shift, 0);
+          ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+          ctx.restore();
+        }
+      }
+
+      // ── Strobe flash ──────────────────────────────────────────────────────
+      if (s.strobeEnabled) {
+        let maxB = 0; for (let i = 0; i < 10; i++) if (dataArray[i] > maxB) maxB = dataArray[i];
+        if (maxB > 240) {
+          ctx.save();
+          ctx.fillStyle = `rgba(255,255,255,${(maxB - 240) / 15 * 0.4})`;
+          ctx.fillRect(0, 0, virtualWidth, virtualHeight);
+          ctx.restore();
+        }
+      }
+
+      // ── Ripple rings ──────────────────────────────────────────────────────
+      if (s.rippleEnabled) {
+        let bassR = 0; for (let i = 0; i < 15; i++) bassR += dataArray[i]; bassR = bassR / 15 / 255;
+        if (bassR > 0.3) {
+          for (let r = 1; r <= 3; r++) {
+            const ripR = currentRadius + bassR * 120 * s.sensitivity * r * 0.4;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, ripR, 0, Math.PI * 2);
+            ctx.strokeStyle = r % 2 === 0 ? vizPC : vizSC;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = (1 - (r / 4)) * bassR * 0.7;
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        }
+      }
+
+      // ── Pixelate ──────────────────────────────────────────────────────────
+      if (s.pixelateEnabled) {
+        let avgAll = 0; for (let i = 0; i < 60; i++) avgAll += dataArray[i]; avgAll = avgAll / 60 / 255;
+        const blockSize = Math.max(4, Math.round(20 - avgAll * 14 * s.sensitivity));
+        ctx.save();
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const tmpCanvas = document.createElement('canvas');
+        tmpCanvas.width = Math.ceil(canvas.width / blockSize);
+        tmpCanvas.height = Math.ceil(canvas.height / blockSize);
+        const tmpCtx = tmpCanvas.getContext('2d')!;
+        tmpCtx.drawImage(canvas, 0, 0, tmpCanvas.width, tmpCanvas.height);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(tmpCanvas, 0, 0, canvas.width, canvas.height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.restore();
+        void imgData;
+      }
 
       ctx.beginPath(); ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI);
       ctx.fillStyle = s.centerColor; ctx.fill();
