@@ -100,6 +100,8 @@ export default function App() {
   const logoImgRef = useRef<HTMLImageElement | null>(null);
   const bgImgRef = useRef<HTMLImageElement | null>(null);
   const renderFrameRef = useRef<((ts: number) => void) | null>(null);
+  const liveProgressRef = useRef<HTMLSpanElement>(null);
+  const liveProgressBarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
 
@@ -264,6 +266,15 @@ export default function App() {
       const scale = s.performanceMode ? 0.5 : 1;
 
       const isLiveRecordingNow = isLiveRecordingRef.current;
+
+      if (isLiveRecordingNow && audioRef.current && liveProgressRef.current && liveProgressBarRef.current) {
+        const duration = audioRef.current.duration;
+        if (duration > 0) {
+          const p = Math.min(100, Math.max(0, (audioRef.current.currentTime / duration) * 100));
+          liveProgressRef.current.innerText = `${Math.round(p)}%`;
+          liveProgressBarRef.current.style.width = `${p}%`;
+        }
+      }
 
       if (!isLiveRecordingNow) {
         const box = previewBoxRef.current;
@@ -673,33 +684,46 @@ export default function App() {
             {isLiveRecording && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center
                               bg-black/85 backdrop-blur-md">
-                {/* Animated download icon */}
-                <div className="relative mb-5">
-                  <div className="w-16 h-16 rounded-full bg-white/8 border border-white/15
-                                  flex items-center justify-center">
-                    <svg className="w-7 h-7 text-white animate-bounce" viewBox="0 0 24 24"
-                      fill="none" stroke="currentColor" strokeWidth="2.2"
-                      strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
+                <div className="relative mb-5 flex items-center justify-center">
+                  <div className="w-16 h-16 rounded-full bg-white/5 border border-white/10 flex items-center justify-center relative z-10 shadow-[0_0_30px_rgba(255,255,255,0.05)]">
+                    {/* Spinning dotted ring */}
+                    <svg className="absolute inset-0 w-full h-full animate-[spin_4s_linear_infinite]" viewBox="0 0 56 56" fill="none">
+                      <circle cx="28" cy="28" r="26" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" strokeDasharray="4 4" />
                     </svg>
+                    {/* Progress Text */}
+                    <span ref={liveProgressRef} className="text-sm font-bold text-white tabular-nums tracking-tighter">0%</span>
                   </div>
-                  {/* Pulsing ring */}
-                  <span className="absolute inset-0 rounded-full border border-white/20 animate-ping" />
+                  {/* Pulsing glow */}
+                  <span className="absolute inset-0 rounded-full bg-white/5 blur-xl animate-pulse" />
                 </div>
 
-                <p className="text-white font-semibold text-base tracking-wide mb-1">Exporting in background…</p>
-                <p className="text-neutral-400 text-xs text-center max-w-[180px] leading-relaxed">
-                  Recording your visualizer silently. The file will download automatically when done.
+                <p className="text-white font-bold text-lg tracking-tight mb-1">Exporting Video</p>
+                <p className="text-neutral-400 text-[11px] text-center max-w-[200px] leading-relaxed mb-6 uppercase tracking-wider font-semibold">
+                  Recording visualizer silently in real-time.
                 </p>
+
+                {/* Rich Progress Bar */}
+                <div className="w-64 max-w-[80vw] mb-6">
+                  <div className="h-2.5 w-full bg-black/40 border border-white/10 rounded-full overflow-hidden shadow-inner relative">
+                    <div
+                      ref={liveProgressBarRef}
+                      className="h-full bg-white rounded-full transition-shadow relative"
+                      style={{ width: '0%', boxShadow: '0 0 10px rgba(255,255,255,0.5), inset 0 0 5px rgba(255,255,255,0.8)' }}
+                    >
+                      {/* Shimmer sweep effect */}
+                      <div className="absolute top-0 bottom-0 left-0 right-0 overflow-hidden rounded-full z-10">
+                        <div className="w-[40%] h-full bg-gradient-to-r from-transparent via-white/40 to-transparent skew-x-[-20deg] animate-[shimmer_2s_infinite]" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Stop button */}
                 <button
                   onClick={stopLiveRecord}
-                  className="mt-6 px-5 py-2 rounded-full border border-white/15
-                             text-neutral-300 hover:text-white hover:border-white/40
-                             text-xs font-medium transition-all"
+                  className="px-5 py-2.5 rounded-full border border-white/10 bg-white/5
+                             text-neutral-400 hover:text-rose-400 hover:border-rose-500/30 hover:bg-rose-500/10
+                             text-xs font-bold tracking-widest uppercase transition-all"
                 >
                   ✕ Stop & Cancel
                 </button>
