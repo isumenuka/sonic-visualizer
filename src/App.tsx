@@ -1,12 +1,8 @@
 /**
  * Sonic Visualizer
- * Tech: TypeScript, React, Canvas API, WebCodecs, FFmpeg WASM
+ * Tech: TypeScript, React, Canvas API
  *
- * Export engines:
- *   - WebCodecs (primary): GPU-accelerated, fast
- *   - FFmpeg WASM (fallback): CPU-based, universally compatible
- *   - Cloud (Google Cloud Run): server-side rendering for long videos
- *   - Live Record: real-time MediaRecorder capture
+ * Live Record: real-time MediaRecorder capture (canvas + audio)
  */
 
 import React, { useRef, useEffect, useState } from 'react';
@@ -19,18 +15,13 @@ import {
   drawRing, drawStrings, drawOrbit, drawSpikes, drawLaser,
   drawNebula, drawAura, drawPeaks
 } from './visualizers/drawings';
-import { exportWithFFmpeg } from './utils/ffmpegExportEngine';
-import { exportWithWebCodecs } from './utils/exportEngine';
-import { exportWithServer } from './utils/serverExportEngine';
 import { LiveRecorder, downloadRecording } from './utils/liveRecorder';
 
 import { CropModal } from './components/ui/CropModal';
 import { BottomDock } from './components/ui/BottomDock';
 import { SettingsPanel } from './components/ui/SettingsPanel';
-import { ExportModal } from './components/ui/ExportModal';
 
 type AspectRatio = '16:9' | '9:16';
-export type ExportEngine = 'webcodecs' | 'ffmpeg' | 'server';
 
 export default function App() {
   // ── Media state ──────────────────────────────────────────────────────────
@@ -50,22 +41,8 @@ export default function App() {
   const [performanceMode, setPerformanceMode] = useState(false);
   const [shakeOffset, setShakeOffset] = useState({ x: 0, y: 0 });
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [exportProgress, setExportProgress] = useState(0);
-  const [exportSpeed, setExportSpeed] = useState(0);
+  // ── Recording quality ────────────────────────────────────────────────────
   const [recordingQuality, setRecordingQuality] = useState<'1080p' | '2k' | '4k'>('1080p');
-
-  // Dual export engine: WebCodecs (GPU) is primary; FFmpeg WASM is the fallback.
-  const [exportEngine, setExportEngine] = useState<ExportEngine>(() => {
-    // If WebCodecs VideoEncoder is unavailable (old browser), default to FFmpeg.
-    return typeof VideoEncoder !== 'undefined' ? 'webcodecs' : 'ffmpeg';
-  });
-
-  const exportAbortRef = useRef<AbortController | null>(null);
-  const isExportingRef = useRef(false);
-  const wasPlayingRef = useRef(false);
 
   // ── Live Record ──────────────────────────────────────────────────────────
   const [isLiveRecording, setIsLiveRecording] = useState(false);
@@ -112,7 +89,6 @@ export default function App() {
   const centerImgRef = useRef<HTMLImageElement | null>(null);
   const logoImgRef = useRef<HTMLImageElement | null>(null);
   const bgImgRef = useRef<HTMLImageElement | null>(null);
-  // Callback ref so we can restart the rAF loop after export finishes
   const renderFrameRef = useRef<((ts: number) => void) | null>(null);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
@@ -120,130 +96,24 @@ export default function App() {
   // ── Resolution map ───────────────────────────────────────────────────────
   const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
 
-  // ── Export ───────────────────────────────────────────────────────────────
-  const exportVideo = async () => {
-    if (!audioFile) return;
-    const abortController = new AbortController();
-    exportAbortRef.current = abortController;
-    setIsExporting(true);
-    setExportError(null);
-    isExportingRef.current = true;
-    setExportProgress(0);
-    setExportSpeed(0);
-
-    // ── Stop everything to give the encoder full CPU/GPU/memory ──────────────
-    // 1. Pause audio playback
-    wasPlayingRef.current = isPlaying;
-    if (audioRef.current && isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-    }
-    // 2. Suspend Web Audio graph (stops analyser, frees audio thread CPU)
-    if (audioContextRef.current && audioContextRef.current.state === 'running') {
-      audioContextRef.current.suspend();
-    }
-    // 3. Stop the canvas animation loop
-    cancelAnimationFrame(animationRef.current);
-    animationRef.current = 0;
-
-    let [w, h] = resolutionMap[recordingQuality];
-    if (aspectRatio === '9:16') [w, h] = [h, w];
-
-    const engineFn = exportEngine === 'webcodecs' ? exportWithWebCodecs : exportWithFFmpeg;
-
-    // resumeApp must be declared before any early-return paths
-    const resumeApp = () => {
-      if (animationRef.current === 0 && renderFrameRef.current) {
-        animationRef.current = requestAnimationFrame(renderFrameRef.current);
-      }
-      audioContextRef.current?.resume();
-    };
-
-    if (exportEngine === 'server') {
-      // ── Cloud render: send audio + settings to Render.com server ────────────
-      try {
-        await exportWithServer({
-          audioFile,
-          quality: recordingQuality,
-          aspectRatio,
-          settings: settingsRef.current,
-          onProgress: (pct, stage) => {
-            setExportProgress(pct);
-            // Reuse exportSpeed as a stage label indicator (0 = uploading, 1 = rendering)
-            setExportSpeed(stage.startsWith('Server') ? 1 : 0);
-          },
-          signal: abortController.signal,
-        });
-        setIsExporting(false);
-        isExportingRef.current = false;
-        exportAbortRef.current = null;
-        resumeApp();
-      } catch (err: any) {
-        setIsExporting(false);
-        isExportingRef.current = false;
-        exportAbortRef.current = null;
-        resumeApp();
-        if (!abortController.signal.aborted) {
-          setExportError(err?.message || String(err));
-        }
-      }
-      return;  // server path handled above, skip local encoder below
-    }
-
-    try {
-      await engineFn({
-        audioFile, width: w, height: h, quality: recordingQuality,
-        settings: settingsRef.current,
-        bgImg: bgImgRef.current, centerImg: centerImgRef.current, logoImg: logoImgRef.current,
-        onProgress: (pct, speedX) => { setExportProgress(pct); setExportSpeed(speedX); },
-        signal: abortController.signal,
-      });
-      setIsExporting(false);
-      isExportingRef.current = false;
-      exportAbortRef.current = null;
-      resumeApp();
-    } catch (err: any) {
-      if (!abortController.signal.aborted) {
-        setExportError(err?.message || String(err));
-        console.error('[Export Error]', err);
-        resumeApp();
-      } else {
-        setIsExporting(false);
-        isExportingRef.current = false;
-        exportAbortRef.current = null;
-        resumeApp();
-      }
-    }
-  };
-
-  const cancelExport = () => {
-    exportAbortRef.current?.abort();
-    setIsExporting(false);
-    isExportingRef.current = false;
-    setExportError(null);
-  };
-
-  // ── Live Record ─────────────────────────────────────────────────────
+  // ── Live Record ─────────────────────────────────────────────────────────
   const startLiveRecord = () => {
     if (!audioFile || !canvasRef.current || !audioRef.current || !audioContextRef.current) return;
-    if (isExporting || isLiveRecording) return;
+    if (isLiveRecording) return;
 
     // ── Set canvas to full recording resolution ───────────────────────────
-    let [recW, recH] = resolutionMap[recordingQuality]; // e.g. [1920, 1080]
+    let [recW, recH] = resolutionMap[recordingQuality];
     if (aspectRatio === '9:16') [recW, recH] = [recH, recW];
     const canvas = canvasRef.current;
-    // Save preview-box CSS sizes for restoration after recording
     const prevCssW = canvas.style.width;
     const prevCssH = canvas.style.height;
     canvas.width = recW;
     canvas.height = recH;
-    // Keep CSS display size matching the preview box (visually same, but rendering at full res)
     const box = previewBoxRef.current;
     if (box) {
       canvas.style.width = box.clientWidth + 'px';
       canvas.style.height = box.clientHeight + 'px';
     }
-    // Block render loop from auto-resizing canvas back to preview size
     isLiveRecordingRef.current = true;
 
     // Seek to beginning and play
@@ -251,7 +121,6 @@ export default function App() {
     audioRef.current.play().catch(console.error);
     setIsPlaying(true);
 
-    // Resume AudioContext if suspended
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
@@ -262,12 +131,10 @@ export default function App() {
       audioContext: audioContextRef.current,
       fps: 30,
       onStop: (blob) => {
-        // Restore canvas to preview-box size so preview looks normal again
         isLiveRecordingRef.current = false;
         if (canvasRef.current) {
           canvasRef.current.style.width = prevCssW;
           canvasRef.current.style.height = prevCssH;
-          // The render loop will auto-resize canvas.width/height on next frame
         }
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
         downloadRecording(blob, `${baseName}-${recordingQuality}`);
@@ -387,17 +254,16 @@ export default function App() {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const s = settingsRef.current;
-      const isExportingNow = isExportingRef.current;
-      const targetFps = (s.performanceMode && !isExportingNow) ? 30 : 60;
+      const targetFps = s.performanceMode ? 30 : 60;
       if (timestamp - lastFrameTime < 1000 / targetFps) return;
       lastFrameTime = timestamp;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      const scale = (s.performanceMode && !isExportingNow) ? 0.5 : 1;
+      const scale = s.performanceMode ? 0.5 : 1;
 
       const isLiveRecordingNow = isLiveRecordingRef.current;
 
-      if (!isExportingNow && !isLiveRecordingNow) {
+      if (!isLiveRecordingNow) {
         const box = previewBoxRef.current;
         const boxW = box ? box.clientWidth : window.innerWidth;
         const boxH = box ? box.clientHeight : window.innerHeight;
@@ -411,19 +277,19 @@ export default function App() {
       }
 
       if (analyserRef.current) {
-        if (s.performanceMode && !isExportingNow && analyserRef.current.fftSize !== 512) analyserRef.current.fftSize = 512;
-        else if ((!s.performanceMode || isExportingNow) && analyserRef.current.fftSize !== 2048) analyserRef.current.fftSize = 2048;
+        if (s.performanceMode && analyserRef.current.fftSize !== 512) analyserRef.current.fftSize = 512;
+        else if (!s.performanceMode && analyserRef.current.fftSize !== 2048) analyserRef.current.fftSize = 2048;
         analyserRef.current.getByteFrequencyData(dataArray);
       } else { dataArray.fill(0); }
 
       if (s.colorCycle) colorCycleHue = (colorCycleHue + 0.5) % 360;
 
       const box = previewBoxRef.current;
-      const virtualWidth = (isExportingNow || isLiveRecordingNow) ? canvas.width : (box ? box.clientWidth : window.innerWidth);
-      const virtualHeight = (isExportingNow || isLiveRecordingNow) ? canvas.height : (box ? box.clientHeight : window.innerHeight);
+      const virtualWidth = isLiveRecordingNow ? canvas.width : (box ? box.clientWidth : window.innerWidth);
+      const virtualHeight = isLiveRecordingNow ? canvas.height : (box ? box.clientHeight : window.innerHeight);
 
       ctx.save();
-      if (!isExportingNow && !isLiveRecordingNow) ctx.scale(scale, scale);
+      if (!isLiveRecordingNow) ctx.scale(scale, scale);
 
       if (s.trailEnabled) {
         ctx.globalCompositeOperation = 'destination-out';
@@ -622,17 +488,28 @@ export default function App() {
 
         {/* ── LEFT: canvas preview ── */}
         <div className="flex-1 flex items-center justify-center p-3 sm:p-5 overflow-hidden relative min-w-0 bg-[#080808]">
-          {/* Preview box */}
+          {/* Preview box — sized to exactly fill the container at the correct ratio */}
           <div
             ref={previewBoxRef}
             className="relative bg-black rounded-xl overflow-hidden border border-white/6"
             style={
               aspectRatio === '16:9'
-                ? { aspectRatio: '16/9', width: '100%', maxWidth: '100%', maxHeight: '100%' }
-                : { aspectRatio: '9/16', height: '100%', maxHeight: '100%', width: 'auto', maxWidth: '100%' }
+                ? {
+                  aspectRatio: '16/9',
+                  width: '100%',
+                  maxHeight: '100%',
+                  /* if the width-derived height would overflow, shrink via max-height */
+                  height: 'auto',
+                }
+                : {
+                  aspectRatio: '9/16',
+                  height: '100%',
+                  maxWidth: '100%',
+                  width: 'auto',
+                }
             }
           >
-            {/* Canvas */}
+            {/* Canvas fills the box */}
             <canvas
               ref={canvasRef}
               className="absolute inset-0"
@@ -670,18 +547,14 @@ export default function App() {
           centerImage={centerImage}
           isPlaying={isPlaying}
           showControls={showControls}
-          isExporting={isExporting}
           isLiveRecording={isLiveRecording}
           recordingQuality={recordingQuality}
-          exportEngine={exportEngine}
           togglePlay={togglePlay}
           onAudioUpload={handleAudioUpload}
           onBgUpload={handleBgUpload}
           onCenterImageUpload={handleCenterImageUpload}
           onToggleSettings={() => setShowControls(v => !v)}
           onQualityChange={setRecordingQuality}
-          onEngineChange={setExportEngine}
-          onExport={exportVideo}
           onLiveRecord={isLiveRecording ? stopLiveRecord : startLiveRecord}
         />
       </div>
@@ -691,16 +564,6 @@ export default function App() {
 
       {/* ── Crop modal ── */}
       {cropSrc && <CropModal src={cropSrc} onConfirm={handleCropConfirm} onCancel={() => setCropSrc(null)} />}
-
-      {/* ── Export modal ── */}
-      <ExportModal
-        isOpen={isExporting}
-        progress={exportProgress}
-        speed={exportSpeed}
-        error={exportError}
-        engine={exportEngine}
-        onCancel={cancelExport}
-      />
     </div>
   );
 }
