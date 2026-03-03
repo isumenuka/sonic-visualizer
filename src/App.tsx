@@ -53,38 +53,38 @@ export default function App() {
 
   // ── Visualizer settings ──────────────────────────────────────────────────
   const [settings, setSettings] = useState<VisualizerSettings>({
-    primaryColor: '#00ff88',
-    secondaryColor: '#00aaff',
-    sensitivity: 1.5,
+    primaryColor: '#ff2a5f',
+    secondaryColor: '#ff8a8a',
+    sensitivity: 1.4,
     barWidth: 3,
-    radius: 150,
-    type: 'bars',
-    centerMode: 'text',
-    centerText: 'SONIC',
+    radius: 170,
+    type: 'strings',
+    centerMode: 'profile',
+    centerText: '',
     centerTextSize: 20,
     centerColor: '#000000',
     logoScale: 0.5,
-    bgBlur: 10,
-    bgOpacity: 0.5,
+    bgBlur: 8,
+    bgOpacity: 0.65,
     mirror: true,
-    rotationSpeed: 0,
-    pulseEnabled: false,
+    rotationSpeed: 0.5,
+    pulseEnabled: true,
     glowEnabled: true,
-    trailEnabled: false,
-    colorCycle: false,
-    shakeEnabled: false,
+    trailEnabled: true,
+    colorCycle: true,
+    shakeEnabled: true,
     echoEnabled: false,
     invertColors: false,
-    bgParticlesEnabled: false,
+    bgParticlesEnabled: true,
     performanceMode: false,
     starburstEnabled: false,
     kaleidoscopeEnabled: false,
-    scanlineEnabled: false,
+    scanlineEnabled: true,
     chromaticEnabled: false,
     vignetteEnabled: false,
     pixelateEnabled: false,
     strobeEnabled: false,
-    rippleEnabled: false,
+    rippleEnabled: true,
   });
 
   // ── Refs ─────────────────────────────────────────────────────────────────
@@ -104,6 +104,42 @@ export default function App() {
   const liveProgressBarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  // ── Auto-load Demo Assets ────────────────────────────────────────────────
+  useEffect(() => {
+    const loadDemo = async () => {
+      try {
+        // Load demo background and profile image
+        setBgImage('/demo-bg.png');
+        setCenterImage('/demo-profile.png');
+
+        const img = new Image();
+        img.onload = () => {
+          centerImgRef.current = img;
+          setSettings(s => ({ ...s, centerMode: 'profile' }));
+        };
+        img.src = '/demo-profile.png';
+
+        // Fetch demo audio and convert to File object
+        const response = await fetch('/demo-audio.mp3');
+        const blob = await response.blob();
+        const file = new File([blob], 'DemonSlayer-Theme.mp3', { type: 'audio/mpeg' });
+
+        setAudioFile(file);
+
+        // Setup audio element for immediate playback
+        if (audioRef.current) {
+          const url = URL.createObjectURL(file);
+          audioRef.current.src = url;
+          audioRef.current.load();
+        }
+      } catch (err) {
+        console.error('Failed to load demo assets:', err);
+      }
+    };
+
+    loadDemo();
+  }, []);
 
   // ── Resolution map ───────────────────────────────────────────────────────
   const resolutionMap = { '1080p': [1920, 1080], '2k': [2560, 1440], '4k': [3840, 2160] };
@@ -378,9 +414,7 @@ export default function App() {
 
       rotation += s.rotationSpeed * .01;
 
-      ctx.save();
       if (s.invertColors) ctx.filter = 'invert(1) hue-rotate(180deg)';
-      ctx.translate(centerX, centerY); ctx.rotate(rotation); ctx.translate(-centerX, -centerY);
       if (s.glowEnabled) {
         ctx.shadowBlur = 20;
         ctx.shadowColor = s.colorCycle ? `hsl(${colorCycleHue},100%,60%)` : s.primaryColor;
@@ -415,12 +449,12 @@ export default function App() {
         else if (s.type === 'lightning') drawLightning(ctx, dataArray, centerX, centerY, currentRadius, vizS);
         else if (s.type === 'waveform') drawWaveform(ctx, dataArray, centerX, centerY, currentRadius, vizS);
         else if (s.type === 'prism') drawPrism(ctx, dataArray, centerX, centerY, currentRadius, vizS);
-        ctx.restore();
       };
 
       renderViz(1, 1);
       if (s.echoEnabled) { renderViz(1.2, .3); renderViz(1.5, .1); }
       ctx.shadowBlur = 0;
+      ctx.filter = 'none';
 
       // ── Starburst overlay ──────────────────────────────────────────────────
       if (s.starburstEnabled) {
@@ -553,13 +587,22 @@ export default function App() {
       ctx.fillStyle = s.centerColor; ctx.fill();
 
       if (s.centerMode === 'profile' && centerImgRef.current) {
-        ctx.save(); ctx.beginPath(); ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI); ctx.clip();
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(rotation);
+        ctx.translate(-centerX, -centerY);
+        ctx.beginPath(); ctx.arc(centerX, centerY, currentRadius - 5, 0, 2 * Math.PI); ctx.clip();
         ctx.drawImage(centerImgRef.current, centerX - currentRadius, centerY - currentRadius, currentRadius * 2, currentRadius * 2);
         ctx.restore();
       } else if (s.centerMode === 'logo' && logoImgRef.current) {
+        ctx.save();
+        ctx.translate(centerX, centerY);
+        ctx.rotate(rotation);
+        ctx.translate(-centerX, -centerY);
         const img = logoImgRef.current;
         const size = (currentRadius * 2) * s.logoScale;
         ctx.drawImage(img, centerX - size / 2, centerY - size / 2, size, size);
+        ctx.restore();
       }
 
       ctx.strokeStyle = s.primaryColor; ctx.lineWidth = 2;
@@ -575,10 +618,11 @@ export default function App() {
         if (words.length > 1 && s.centerText.length > 10) {
           ctx.fillText(words.slice(0, Math.ceil(words.length / 2)).join(' '), centerX, centerY - (s.centerTextSize * pulseScale) / 1.5);
           ctx.fillText(words.slice(Math.ceil(words.length / 2)).join(' '), centerX, centerY + (s.centerTextSize * pulseScale) / 1.5);
-        } else { ctx.fillText(s.centerText, centerX, centerY); }
+        } else {
+          ctx.fillText(s.centerText, centerX, centerY);
+        }
         ctx.restore();
       }
-      ctx.restore();
     };
 
     renderFrameRef.current = renderFrame;
