@@ -12,6 +12,7 @@ export interface LiveRecordOptions {
     canvas: HTMLCanvasElement;
     audioElement: HTMLAudioElement;
     audioContext: AudioContext;
+    audioSourceNode?: MediaElementAudioSourceNode;
     fps?: number;
     onStop?: (blob: Blob) => void;
 }
@@ -23,6 +24,7 @@ export class LiveRecorder {
     private audioDestNode: MediaStreamAudioDestinationNode | null = null;
     private audioCtx: AudioContext;
     private audioElement: HTMLAudioElement;
+    private audioSourceNode?: MediaElementAudioSourceNode;
     private canvas: HTMLCanvasElement;
     private fps: number;
     private onStop?: (blob: Blob) => void;
@@ -31,6 +33,7 @@ export class LiveRecorder {
         this.canvas = options.canvas;
         this.audioElement = options.audioElement;
         this.audioCtx = options.audioContext;
+        this.audioSourceNode = options.audioSourceNode;
         this.fps = options.fps ?? 30;
         this.onStop = options.onStop;
     }
@@ -72,15 +75,17 @@ export class LiveRecorder {
         this.audioDestNode = this.audioCtx.createMediaStreamDestination();
 
         // Connect the audio source → the recording destination
-        // We do this from the audio element via captureStream for reliability
+        // We do this by capturing the stream from the WebAudio API destination node
         let audioTracks: MediaStreamTrack[] = [];
         try {
-            // Try HTML5 captureStream first (works in Chrome/Edge/Firefox)
-            const elStream = (this.audioElement as any).captureStream?.() as MediaStream | undefined;
-            if (elStream) {
-                audioTracks = elStream.getAudioTracks();
+            if (this.audioDestNode && this.audioSourceNode) {
+                // Route the original audio source into the new generic destination
+                this.audioSourceNode.connect(this.audioDestNode);
+                audioTracks = this.audioDestNode.stream.getAudioTracks();
             }
-        } catch { }
+        } catch (err) {
+            console.error('Audio track capture failed:', err);
+        }
 
         // Combine video + audio into one stream
         const tracks = [...videoStream.getVideoTracks(), ...audioTracks];

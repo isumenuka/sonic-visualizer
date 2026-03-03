@@ -170,6 +170,7 @@ export default function App() {
       canvas,
       audioElement: audioRef.current,
       audioContext: audioContextRef.current,
+      audioSourceNode: sourceRef.current || undefined,
       fps: 30,
       onStop: (blob) => {
         isLiveRecordingRef.current = false;
