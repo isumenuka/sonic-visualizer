@@ -101,25 +101,17 @@ export default function App() {
     if (!audioFile || !canvasRef.current || !audioRef.current || !audioContextRef.current) return;
     if (isLiveRecording) return;
 
-    // ── Set canvas to full recording resolution ───────────────────────────
-    let [recW, recH] = resolutionMap[recordingQuality];
-    if (aspectRatio === '9:16') [recW, recH] = [recH, recW];
     const canvas = canvasRef.current;
-    const prevCssW = canvas.style.width;
-    const prevCssH = canvas.style.height;
-    canvas.width = recW;
-    canvas.height = recH;
-    const box = previewBoxRef.current;
-    if (box) {
-      canvas.style.width = box.clientWidth + 'px';
-      canvas.style.height = box.clientHeight + 'px';
-    }
+
+    // Lock the render loop so it stops auto-resizing canvas during recording
     isLiveRecordingRef.current = true;
 
-    // Seek to beginning and play
-    audioRef.current.currentTime = 0;
-    audioRef.current.play().catch(console.error);
-    setIsPlaying(true);
+    // Only seek to start if audio is not already playing
+    if (!isPlaying) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(console.error);
+      setIsPlaying(true);
+    }
 
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
@@ -132,12 +124,8 @@ export default function App() {
       fps: 30,
       onStop: (blob) => {
         isLiveRecordingRef.current = false;
-        if (canvasRef.current) {
-          canvasRef.current.style.width = prevCssW;
-          canvasRef.current.style.height = prevCssH;
-        }
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
-        downloadRecording(blob, `${baseName}-${recordingQuality}`);
+        downloadRecording(blob, `${baseName}-live`);
         setIsLiveRecording(false);
       },
     });
