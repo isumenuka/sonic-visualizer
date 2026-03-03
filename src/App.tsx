@@ -338,7 +338,10 @@ export default function App() {
       for (let i = 0; i < 20; i++) { bassTotal += dataArray[i]; if (dataArray[i] > maxBass) maxBass = dataArray[i]; }
       const bassAverage = bassTotal / 20;
       const pulseScale = s.pulseEnabled ? 1 + (bassAverage / 255) * .2 : 1;
-      const currentRadius = s.radius * pulseScale;
+      // Clamp radius so the circle always fits inside the canvas (critical for 9:16)
+      const maxRadius = Math.min(virtualWidth, virtualHeight) / 2 - 30;
+      const clampedRadius = Math.min(s.radius, maxRadius);
+      const currentRadius = clampedRadius * pulseScale;
 
       // Shake
       let shakeX = 0, shakeY = 0;
