@@ -174,8 +174,11 @@ export default function App() {
       fps: 30,
       onStop: (blob) => {
         isLiveRecordingRef.current = false;
-        // Restore audio volume
-        if (audioRef.current) audioRef.current.volume = 1;
+        // Restore audio and trigger download
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.volume = 1;
+        }
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
         downloadRecording(blob, `${baseName}-live`);
         setIsLiveRecording(false);
@@ -195,13 +198,9 @@ export default function App() {
   };
 
   const stopLiveRecord = () => {
+    // Just call stop() — the onStop callback handles all cleanup:
+    // restoring volume, resetting isLiveRecording, and triggering the download.
     liveRecorderRef.current?.stop();
-    isLiveRecordingRef.current = false;
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.volume = 1; // restore volume
-      setIsPlaying(false);
-    }
   };
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
