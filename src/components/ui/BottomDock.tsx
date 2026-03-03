@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Pause, Music, Image as ImageIcon, User, Settings } from 'lucide-react';
+import { Play, Pause, Music, Image as ImageIcon, User, Settings, Download } from 'lucide-react';
 
 export interface BottomDockProps {
     audioFile: File | null;
@@ -28,7 +28,6 @@ export function BottomDock({
         <div className="flex items-center justify-center w-full"
             style={{ maxWidth: 'calc(100vw - 16px)' }}>
 
-            {/* ── Single unified dock row ── */}
             <div className="flex items-center gap-1 sm:gap-1.5
                 bg-[#0a0a0a]/90 backdrop-blur-3xl
                 border border-white/10
@@ -90,42 +89,6 @@ export function BottomDock({
 
                 <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
 
-                {/* ── 🔴 Live Record Button ── */}
-                <button
-                    onClick={onLiveRecord}
-                    disabled={!audioFile}
-                    title={isLiveRecording ? 'Stop recording & download' : 'Live Record — records canvas + audio in real-time'}
-                    className={`p-2 sm:p-2.5 rounded-full transition-all relative group shrink-0 ${isLiveRecording
-                        ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                        : !audioFile
-                            ? 'text-neutral-600 cursor-not-allowed'
-                            : 'text-neutral-300 hover:bg-red-500/10 hover:text-red-400'
-                        }`}
-                >
-                    {/* Record icon — pulsing dot when recording */}
-                    <svg className="w-4 h-4 sm:w-5 sm:h-5" viewBox="0 0 24 24" fill="none">
-                        <circle
-                            cx="12" cy="12" r="8"
-                            stroke="currentColor" strokeWidth="2"
-                        />
-                        <circle
-                            cx="12" cy="12" r="4"
-                            fill="currentColor"
-                            className={isLiveRecording ? 'animate-pulse' : ''}
-                        />
-                    </svg>
-                    {/* Live indicator badge */}
-                    {isLiveRecording && (
-                        <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
-                    )}
-                    {/* Tooltip */}
-                    <span className="absolute -top-9 left-1/2 -translate-x-1/2 hidden sm:block bg-black/80 px-2.5 py-1 rounded-lg text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity border border-white/10 pointer-events-none z-50">
-                        {isLiveRecording ? '⏹ Stop & Download' : '⏺ Live Record'}
-                    </span>
-                </button>
-
-                <div className="w-px h-6 bg-white/10 mx-0.5 sm:mx-1 shrink-0" />
-
                 {/* ── Quality selector ── */}
                 <div className="flex items-center gap-0.5 bg-white/5 rounded-full px-1 py-1 border border-white/10 shrink-0">
                     {(['1080p', '2k', '4k'] as const).map(q => (
@@ -139,6 +102,45 @@ export function BottomDock({
                         </button>
                     ))}
                 </div>
+
+                {/* ── Export / Download button ── */}
+                <button
+                    onClick={onLiveRecord}
+                    disabled={!audioFile}
+                    title={isLiveRecording ? 'Recording… click to stop & download' : 'Export — record & download video'}
+                    className={`
+                        flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2
+                        rounded-full font-semibold text-[10px] sm:text-[11px] tracking-wide
+                        transition-all shrink-0 relative overflow-hidden
+                        ${isLiveRecording
+                            ? 'bg-white text-black cursor-pointer'
+                            : !audioFile
+                                ? 'bg-white/5 text-neutral-600 cursor-not-allowed'
+                                : 'bg-white text-black hover:bg-neutral-200 active:scale-95'
+                        }
+                    `}
+                >
+                    {isLiveRecording ? (
+                        <>
+                            {/* Animated download arrow bouncing */}
+                            <span className="relative flex items-center justify-center w-3.5 h-3.5">
+                                <Download className="w-3.5 h-3.5 animate-bounce" />
+                            </span>
+                            <span>Downloading…</span>
+                            {/* Shimmer sweep animation */}
+                            <span className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
+                                <span className="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-black/10 to-transparent animate-[shimmer_1.4s_ease-in-out_infinite]" />
+                            </span>
+                            {/* Red pulsing recording dot */}
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                        </>
+                    ) : (
+                        <>
+                            <Download className="w-3.5 h-3.5 shrink-0" />
+                            <span>Export</span>
+                        </>
+                    )}
+                </button>
             </div>
         </div>
     );

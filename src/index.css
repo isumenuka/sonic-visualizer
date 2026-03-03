@@ -54,3 +54,8 @@
     background: rgba(255, 255, 255, 0.2);
   }
 }
+
+@keyframes shimmer {
+  0%   { left: -40%; }
+  100% { left: 130%; }
+}

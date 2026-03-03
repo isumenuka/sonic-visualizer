@@ -106,12 +106,13 @@ export default function App() {
     // Lock the render loop so it stops auto-resizing canvas during recording
     isLiveRecordingRef.current = true;
 
-    // Only seek to start if audio is not already playing
-    if (!isPlaying) {
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(console.error);
-      setIsPlaying(true);
-    }
+    // ── Mute speaker output so the user isn't disturbed ──────────────────
+    audioRef.current.volume = 0;
+
+    // Always seek to start and play from the beginning for a complete export
+    audioRef.current.currentTime = 0;
+    audioRef.current.play().catch(console.error);
+    setIsPlaying(true);
 
     if (audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
@@ -124,9 +125,12 @@ export default function App() {
       fps: 30,
       onStop: (blob) => {
         isLiveRecordingRef.current = false;
+        // Restore audio volume
+        if (audioRef.current) audioRef.current.volume = 1;
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
         downloadRecording(blob, `${baseName}-live`);
         setIsLiveRecording(false);
+        setIsPlaying(false);
       },
     });
     rec.start();
@@ -136,7 +140,6 @@ export default function App() {
     // Auto-stop when song finishes
     const handleEnded = () => {
       rec.stop();
-      setIsPlaying(false);
       audioRef.current!.removeEventListener('ended', handleEnded);
     };
     audioRef.current.addEventListener('ended', handleEnded);
@@ -147,6 +150,7 @@ export default function App() {
     isLiveRecordingRef.current = false;
     if (audioRef.current) {
       audioRef.current.pause();
+      audioRef.current.volume = 1; // restore volume
       setIsPlaying(false);
     }
   };
@@ -503,6 +507,43 @@ export default function App() {
               className="absolute inset-0"
               style={{ transform: `translate(${shakeOffset.x}px,${shakeOffset.y}px)` }}
             />
+
+            {/* ── Background-export overlay ── shown while recording so user can do other things */}
+            {isLiveRecording && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center
+                              bg-black/85 backdrop-blur-md">
+                {/* Animated download icon */}
+                <div className="relative mb-5">
+                  <div className="w-16 h-16 rounded-full bg-white/8 border border-white/15
+                                  flex items-center justify-center">
+                    <svg className="w-7 h-7 text-white animate-bounce" viewBox="0 0 24 24"
+                      fill="none" stroke="currentColor" strokeWidth="2.2"
+                      strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                  </div>
+                  {/* Pulsing ring */}
+                  <span className="absolute inset-0 rounded-full border border-white/20 animate-ping" />
+                </div>
+
+                <p className="text-white font-semibold text-base tracking-wide mb-1">Exporting in background…</p>
+                <p className="text-neutral-400 text-xs text-center max-w-[180px] leading-relaxed">
+                  Recording your visualizer silently. The file will download automatically when done.
+                </p>
+
+                {/* Stop button */}
+                <button
+                  onClick={stopLiveRecord}
+                  className="mt-6 px-5 py-2 rounded-full border border-white/15
+                             text-neutral-300 hover:text-white hover:border-white/40
+                             text-xs font-medium transition-all"
+                >
+                  ✕ Stop & Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
