@@ -17,6 +17,13 @@ function clampSampleRate(rate: number): number {
     );
 }
 
+// Pick H.264 High Profile codec string at the right level for the given dimensions.
+// Level 5.1 supports up to 3840×2160 @ 30fps which covers 1080p, 2K, and 4K.
+function h264Codec(_w: number, _h: number): string {
+    // avc1.PPCCLL  PP=profile(64=High)  CC=constraints(00)  LL=level(33=5.1)
+    return 'avc1.640033';
+}
+
 export class LiveRecorder {
     private canvas: HTMLCanvasElement;
     private audioElement: HTMLAudioElement;
@@ -54,24 +61,63 @@ export class LiveRecorder {
         if (this._isRecording) return;
         this._isRecording = true;
 
-        const target = new ArrayBufferTarget();
         const encWidth = this.canvas.width % 2 === 0 ? this.canvas.width : this.canvas.width - 1;
         const encHeight = this.canvas.height % 2 === 0 ? this.canvas.height : this.canvas.height - 1;
-        // Clamp to a sample rate the AudioEncoder actually supports
         const sampleRate = clampSampleRate(this.audioCtx.sampleRate);
+        const codec = h264Codec(encWidth, encHeight);
 
+        // ── Pre-check AudioEncoder support BEFORE creating the muxer ─────────
+        // This is critical: if we declare audio in the muxer but never write
+        // audio chunks, mp4-muxer produces a malformed file VLC can't open.
+        const audioConfig = {
+            codec: 'mp4a.40.2',
+            sampleRate,
+            numberOfChannels: 2,
+            bitrate: 192_000,
+        };
+        let audioSupported = false;
+        if (typeof AudioEncoder !== 'undefined') {
+            try {
+                const support = await AudioEncoder.isConfigSupported(audioConfig);
+                audioSupported = !!support.supported;
+            } catch (_) {
+                audioSupported = false;
+            }
+        }
+
+        // ── Pre-check VideoEncoder support ────────────────────────────────────
+        const videoConfig = {
+            codec,
+            width: encWidth,
+            height: encHeight,
+            bitrate: Math.min(encWidth * encHeight * this.fps * 0.14, 60_000_000),
+            framerate: this.fps,
+            avc: { format: 'avc' as const },
+        };
+        let resolvedCodec = codec;
+        try {
+            const vsupport = await VideoEncoder.isConfigSupported(videoConfig);
+            if (!vsupport.supported) {
+                // Fall back to Baseline profile Level 5.2 if High isn't supported
+                resolvedCodec = 'avc1.420034';
+            }
+        } catch (_) { /* use default */ }
+
+        const target = new ArrayBufferTarget();
         this.muxer = new Muxer({
             target,
             video: { codec: 'avc', width: encWidth, height: encHeight },
-            audio: { codec: 'aac', sampleRate, numberOfChannels: 2 },
+            // Only declare audio track if AudioEncoder can actually encode audio.
+            // Declaring audio but writing zero chunks produces a malformed MP4.
+            ...(audioSupported ? { audio: { codec: 'aac', sampleRate, numberOfChannels: 2 } } : {}),
             firstTimestampBehavior: 'offset',
             fastStart: 'in-memory',
         });
 
+        // ── Video encoder ─────────────────────────────────────────────────────
         this.videoEncoder = new VideoEncoder({
             output: (chunk, meta) => {
-                // mp4-muxer requires colorSpace in the decoder config metadata.
-                // Canvas frames don't always emit it, so we inject standard sRGB values.
+                // Inject standard sRGB color space if missing (required by mp4-muxer)
                 if (meta?.decoderConfig && !meta.decoderConfig.colorSpace) {
                     (meta.decoderConfig as any).colorSpace = {
                         primaries: 'bt709',
@@ -84,39 +130,28 @@ export class LiveRecorder {
             },
             error: (e) => console.error('VideoEncoder error:', e),
         });
-        const bitrate = encWidth * encHeight * this.fps * 0.14;
-        this.videoEncoder.configure({
-            codec: 'avc1.42E028',   // H.264 Baseline profile
-            width: encWidth,
-            height: encHeight,
-            bitrate: Math.min(bitrate, 60_000_000),
-            framerate: this.fps,
-            // Required by mp4-muxer to avoid "Cannot read properties of null (reading 'colorSpace')"
-            avc: { format: 'avc' },
-        });
+        this.videoEncoder.configure({ ...videoConfig, codec: resolvedCodec });
 
-        // Try to configure AudioEncoder — fall back to video-only if the browser doesn't support it
+        // ── Audio encoder (only if supported) ─────────────────────────────────
         this.audioEncoderReady = false;
-        this.audioEncoder = new AudioEncoder({
-            output: (chunk, meta) => this.muxer.addAudioChunk(chunk, meta),
-            error: (e) => {
-                console.warn('AudioEncoder error (video-only fallback):', e);
-                this.audioEncoderReady = false;
-            },
-        });
-        try {
-            this.audioEncoder.configure({
-                codec: 'mp4a.40.2',
-                sampleRate,
-                numberOfChannels: 2,
-                bitrate: 192_000,
+        if (audioSupported) {
+            this.audioEncoder = new AudioEncoder({
+                output: (chunk, meta) => this.muxer.addAudioChunk(chunk, meta),
+                error: (e) => {
+                    console.warn('AudioEncoder error:', e);
+                    this.audioEncoderReady = false;
+                },
             });
-            this.audioEncoderReady = true;
-        } catch (e) {
-            console.warn('AudioEncoder configure failed (video-only mode):', e);
-            this.audioEncoderReady = false;
+            try {
+                this.audioEncoder.configure(audioConfig);
+                this.audioEncoderReady = true;
+            } catch (e) {
+                console.warn('AudioEncoder configure failed:', e);
+                this.audioEncoderReady = false;
+            }
         }
 
+        // ── Wire audio capture ────────────────────────────────────────────────
         if (this.audioEncoderReady && this.audioSourceNode) {
             this.audioDestNode = this.audioCtx.createMediaStreamDestination();
             this.audioSourceNode.connect(this.audioDestNode);
@@ -146,7 +181,7 @@ export class LiveRecorder {
                     value.close();
                 }
             }
-        } catch (e) {
+        } catch (_) {
             // Ignored — stream cancelled on stop
         }
     }
@@ -181,61 +216,56 @@ export class LiveRecorder {
         cancelAnimationFrame(this.frameHandle);
 
         if (this.audioSourceNode && this.audioDestNode) {
-            try { this.audioSourceNode.disconnect(this.audioDestNode); } catch (e) { }
+            try { this.audioSourceNode.disconnect(this.audioDestNode); } catch (_) { }
         }
         if (this.trackReader) {
-            try { this.trackReader.cancel().catch(() => { }); } catch (e) { }
+            try { this.trackReader.cancel().catch(() => { }); } catch (_) { }
             this.trackReader = null;
         }
 
         console.log('[LiveRecorder] flushing encoders');
 
-        // Close broken audio encoder immediately — prevents hanging flush
-        if (!this.audioEncoderReady) {
-            try { this.audioEncoder?.close(); } catch (e) { }
-            this.audioEncoder = null;
-        }
-
-        // Flush video with a 5s timeout. We do NOT close the encoder during the race —
-        // that would abort in-flight frames. We close after the race either way.
+        // Flush and close video encoder (5s timeout to avoid hanging forever)
         if (this.videoEncoder?.state === 'configured') {
             let flushDone = false;
             const flushPromise = this.videoEncoder.flush()
                 .then(() => { flushDone = true; console.log('[LiveRecorder] video flush done'); })
                 .catch(e => { console.warn('[LiveRecorder] video flush error:', e); });
-            const timeoutPromise = new Promise<void>(res => setTimeout(() => {
-                if (!flushDone) console.warn('[LiveRecorder] video flush timed out, closing encoder');
-                res();
-            }, 5000));
-            await Promise.race([flushPromise, timeoutPromise]);
+            await Promise.race([
+                flushPromise,
+                new Promise<void>(res => setTimeout(() => {
+                    if (!flushDone) console.warn('[LiveRecorder] video flush timed out');
+                    res();
+                }, 5000)),
+            ]);
         }
-        // Close video encoder after flush (success or timeout)
         if (this.videoEncoder?.state !== 'closed') {
-            try { this.videoEncoder?.close(); } catch (e) { }
+            try { this.videoEncoder?.close(); } catch (_) { }
         }
 
-        // Flush audio encoder only if it was healthy
+        // Flush and close audio encoder
         if (this.audioEncoderReady && this.audioEncoder?.state === 'configured') {
             try { await this.audioEncoder.flush(); } catch (e) {
-                console.warn('audio flush error', e);
+                console.warn('[LiveRecorder] audio flush error', e);
             }
         }
         if (this.audioEncoder && this.audioEncoder.state !== 'closed') {
-            try { this.audioEncoder.close(); } catch (e) { }
+            try { this.audioEncoder.close(); } catch (_) { }
         }
 
         console.log('[LiveRecorder] finalizing muxer');
         try {
             this.muxer.finalize();
         } catch (e) {
-            console.error('muxer finalize error', e);
+            console.error('[LiveRecorder] muxer finalize error', e);
         }
 
-        console.log('[LiveRecorder] generating blob');
         const buffer = this.muxer.target.buffer;
+        if (!buffer || buffer.byteLength === 0) {
+            console.error('[LiveRecorder] muxer produced empty buffer — no frames encoded?');
+        }
         const blob = new Blob([buffer], { type: 'video/mp4' });
-
-        console.log('[LiveRecorder] calling onStop callback');
+        console.log(`[LiveRecorder] blob size: ${blob.size} bytes`);
         this.onStop?.(blob);
     }
 }
