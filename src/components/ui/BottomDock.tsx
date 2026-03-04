@@ -1,6 +1,8 @@
 import React from 'react';
 import { Play, Pause, Music, Image as ImageIcon, User, Settings, Download } from 'lucide-react';
 
+export type ExportResolution = '1080p' | '2K' | '4K';
+
 export interface BottomDockProps {
     audioFile: File | null;
     bgFile: File | null;
@@ -8,23 +10,48 @@ export interface BottomDockProps {
     isPlaying: boolean;
     showControls: boolean;
     isLiveRecording: boolean;
+    exportResolution: ExportResolution;
     togglePlay: () => void;
     onAudioUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onBgUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onCenterImageUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
     onToggleSettings: () => void;
     onLiveRecord: () => void;
+    onExportResolutionChange: (r: ExportResolution) => void;
 }
+
+const RESOLUTIONS: ExportResolution[] = ['1080p', '2K', '4K'];
 
 export function BottomDock({
     audioFile, bgFile, centerImage, isPlaying, showControls, isLiveRecording,
+    exportResolution,
     togglePlay, onAudioUpload, onBgUpload, onCenterImageUpload,
-    onToggleSettings, onLiveRecord
+    onToggleSettings, onLiveRecord, onExportResolutionChange
 }: BottomDockProps) {
 
     return (
-        <div className="flex items-center justify-center w-full"
+        <div className="flex flex-col items-center justify-center w-full gap-2"
             style={{ maxWidth: 'calc(100vw - 16px)' }}>
+
+            {/* ── Resolution chips (visible when audio loaded and not recording) ── */}
+            {audioFile && !isLiveRecording && (
+                <div className="flex items-center gap-1">
+                    <span className="text-neutral-500 text-[10px] font-semibold tracking-widest uppercase mr-1">Resolution</span>
+                    {RESOLUTIONS.map(r => (
+                        <button
+                            key={r}
+                            onClick={() => onExportResolutionChange(r)}
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wide border transition-all
+                                ${exportResolution === r
+                                    ? 'bg-white text-black border-white'
+                                    : 'bg-white/5 text-neutral-400 border-white/10 hover:border-white/30 hover:text-white'
+                                }`}
+                        >
+                            {r}
+                        </button>
+                    ))}
+                </div>
+            )}
 
             <div className="flex items-center gap-1 sm:gap-1.5
                 bg-[#0a0a0a]/90 backdrop-blur-3xl
@@ -91,7 +118,9 @@ export function BottomDock({
                 <button
                     onClick={onLiveRecord}
                     disabled={!audioFile}
-                    title={isLiveRecording ? 'Recording… click to stop & download MP4' : 'Export — record & download MP4 video'}
+                    title={isLiveRecording
+                        ? 'Recording… click to stop & download MP4'
+                        : `Export ${exportResolution} MP4 — plays full audio and records`}
                     className={`
                         flex items-center gap-1.5 px-3 sm:px-4 py-1.5 sm:py-2
                         rounded-full font-semibold text-[10px] sm:text-[11px] tracking-wide
@@ -110,7 +139,7 @@ export function BottomDock({
                             <span className="relative flex items-center justify-center w-3.5 h-3.5">
                                 <Download className="w-3.5 h-3.5 animate-bounce" />
                             </span>
-                            <span>Saving MP4…</span>
+                            <span>Exporting…</span>
                             {/* Shimmer sweep animation */}
                             <span className="absolute inset-0 overflow-hidden rounded-full pointer-events-none">
                                 <span className="absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-black/10 to-transparent animate-[shimmer_1.4s_ease-in-out_infinite]" />
@@ -121,7 +150,7 @@ export function BottomDock({
                     ) : (
                         <>
                             <Download className="w-3.5 h-3.5 shrink-0" />
-                            <span>Export MP4</span>
+                            <span>Export {exportResolution}</span>
                         </>
                     )}
                 </button>

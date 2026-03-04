@@ -20,7 +20,7 @@ import {
 import { LiveRecorder, downloadRecording } from './utils/liveRecorder';
 
 import { CropModal } from './components/ui/CropModal';
-import { BottomDock } from './components/ui/BottomDock';
+import { BottomDock, ExportResolution } from './components/ui/BottomDock';
 import { SettingsPanel } from './components/ui/SettingsPanel';
 
 type AspectRatio = '16:9' | '9:16';
@@ -43,8 +43,8 @@ export default function App() {
   const [performanceMode, setPerformanceMode] = useState(false);
   const [shakeOffset, setShakeOffset] = useState({ x: 0, y: 0 });
 
-  // ── Recording quality ────────────────────────────────────────────────────
-  // Removed (legacy GPU options out, simple live MP4 record remains)
+  // ── Export resolution ────────────────────────────────────────────────────
+  const [exportResolution, setExportResolution] = useState<ExportResolution>('1080p');
 
   // ── Live Record ──────────────────────────────────────────────────────────
   const [isLiveRecording, setIsLiveRecording] = useState(false);
@@ -142,7 +142,11 @@ export default function App() {
   }, []);
 
   // ── Resolution map ───────────────────────────────────────────────────────
-  // Resolution map removed
+  const EXPORT_SIZES: Record<ExportResolution, { w: number; h: number }> = {
+    '1080p': { w: 1920, h: 1080 },
+    '2K': { w: 2560, h: 1440 },
+    '4K': { w: 3840, h: 2160 },
+  };
 
   // ── Live Record ─────────────────────────────────────────────────────────
   const startLiveRecord = () => {
@@ -150,6 +154,23 @@ export default function App() {
     if (isLiveRecording) return;
 
     const canvas = canvasRef.current;
+
+    // ── Resize canvas to target export resolution ─────────────────────────
+    const { w: expW, h: expH } = EXPORT_SIZES[exportResolution];
+    // Swap for portrait mode
+    const targetW = aspectRatio === '9:16' ? expH : expW;
+    const targetH = aspectRatio === '9:16' ? expW : expH;
+
+    // Save previous CSS sizing
+    const prevStyleWidth = canvas.style.width;
+    const prevStyleHeight = canvas.style.height;
+
+    canvas.width = targetW;
+    canvas.height = targetH;
+    // Scale the canvas element DOWN so it still fits the preview box
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.objectFit = 'contain';
 
     // Lock the render loop so it stops auto-resizing canvas during recording
     isLiveRecordingRef.current = true;
@@ -174,13 +195,17 @@ export default function App() {
       fps: 30,
       onStop: (blob) => {
         isLiveRecordingRef.current = false;
+        // Restore canvas CSS to preview sizing
+        canvas.style.width = prevStyleWidth;
+        canvas.style.height = prevStyleHeight;
+        canvas.style.objectFit = '';
         // Restore audio and trigger download
         if (audioRef.current) {
           audioRef.current.pause();
           audioRef.current.volume = 1;
         }
         const baseName = audioFile.name.replace(/\.[^.]+$/, '') || 'sonic-visualizer-live';
-        downloadRecording(blob, `${baseName}-live`);
+        downloadRecording(blob, `${baseName}-${exportResolution}`);
         setIsLiveRecording(false);
         setIsPlaying(false);
       },
@@ -806,12 +831,14 @@ export default function App() {
           isPlaying={isPlaying}
           showControls={showControls}
           isLiveRecording={isLiveRecording}
+          exportResolution={exportResolution}
           togglePlay={togglePlay}
           onAudioUpload={handleAudioUpload}
           onBgUpload={handleBgUpload}
           onCenterImageUpload={handleCenterImageUpload}
           onToggleSettings={() => setShowControls(v => !v)}
           onLiveRecord={isLiveRecording ? stopLiveRecord : startLiveRecord}
+          onExportResolutionChange={setExportResolution}
         />
       </div>
 

@@ -89,7 +89,7 @@ export class LiveRecorder {
             codec: 'avc1.42E028',   // H.264 Baseline profile
             width: encWidth,
             height: encHeight,
-            bitrate: Math.min(bitrate, 20_000_000),
+            bitrate: Math.min(bitrate, 60_000_000),
             framerate: this.fps,
             // Required by mp4-muxer to avoid "Cannot read properties of null (reading 'colorSpace')"
             avc: { format: 'avc' },
